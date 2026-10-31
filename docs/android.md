@@ -72,6 +72,21 @@ profile (`tools/prof_report.py`, `tools/crit_path.py`) shows lifted code dominat
 
 ## 3. Memory
 
+Milestone 3 status. Done and run on x86-64 Linux (6.18) and aarch64 under qemu-user (which has no userfaultfd, so it
+takes the fallback by itself): `recomp/layout.py` `FIRST_BASES` (`gen.py --target android`: modules at 0x2000000000,
+128 GiB; PC output checked byte-identical against the previous `layout.py` with fixed module sizes, no NSO files here),
+`host.h` kernel region and host-function window at +0x10000000 and +0x20000000 under `__ANDROID__` (`memory.c`
+`_Static_assert` ties them to the lifted layout), the 6 GiB and 64 GiB blocks searched below the module window as
+before, no `plat_reexec` on Android or with `TOTK_NO_REEXEC` (the failure prints the conflicting `/proc/self/maps`
+lines), and mprotect write tracking in `linux.c` (`mp_fault`, `mp_written`, `plat_mem_unarm`; `tests/mem_probe.py`:
+no write lost with four writers, 15 of 15 runs). Still assumption: that 0x2000000000 and the lower blocks are free in
+a real app process (needs `/proc/self/maps` on devices; the 64 GiB alias block needs `RLIMIT_AS` unlimited), early
+reservation from a constructor or `JNI_OnLoad` (milestone 4), the cost of the fault path on a phone (the probe
+shows up to one VMA per scattered written page (1059 after 1024 pages under qemu), so a frame that writes tens of
+thousands of distinct pages approaches `vm.max_map_count`; a failed re-arm aborts with a message), SELinux access to `/proc/self/maps` and to
+`userfaultfd`. Known limits of the fallback: `mem_thaw` must precede every kernel write into guest memory (the existing
+callers do; it now also unarms), and a guest decommit racing a first write to that page can leave the page writable.
+
 What the code requires:
 - Guest address equals host address, all below 2^39 (`host.h` `RT_ADDRESS_LIMIT`; `layout.py`, `ADDRESS_LIMIT`).
 - Modules at `FIRST_BASE = 0x7000000000` (448 GiB), kernel region 0x7010000000, host function window 0x7020000000

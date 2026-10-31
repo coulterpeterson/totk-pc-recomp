@@ -215,6 +215,11 @@ change passes these, all run with `.venv`:
 A `--cpu v2` build passes the same differential tests with `--cflags=-march=x86-64-v2`; they compile `runtime/fma.c`
 too, so they check the software fma the v2 build links rather than the C runtime's.
 
+`tests/mem_probe.py [--target pc|android] [--aarch64]` builds `runtime/mem_probe.c` with `memory.c` and `platform/linux.c`
+on their own (no game files, no SDL) and checks the address-space reservations and write tracking: written pages, a file
+read, a frozen region, four writers against a draining reader, and the VMA count. `TOTK_WW=mprotect` forces the
+page-protection tracking that older kernels (Android before 6.7) use. The probe is also `totk --probe-mem`.
+
 Runtime probes, each a mode of `totk.exe` (the list is at the top of `runtime/main.c`): `--probe-kernel`,
 `--probe-vkexec`, `--probe-nvn-tex` and `--probe-shader` cover most runtime changes. `--probe-shader` and the draw
 part of `--probe-vkexec` translate shaders of the census below: they look for `build/<ver>/shaders/jobs.json` of the

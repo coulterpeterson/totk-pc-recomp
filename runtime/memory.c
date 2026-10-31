@@ -8,6 +8,7 @@
 // come back zeroed, so no stale-page bookkeeping is needed. The stack and heap block and the alias region are
 // reserved write-watched (platform.h plat_mem_reserve): mem_written_pages reports the pages the CPU wrote, which
 // the Vulkan back end uploads again.
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,10 @@ enum { ATTR_PERMISSION_LOCKED = 16 };
 #define R_INVALID_REGION 0xdc01u
 #define R_LIMIT_REACHED 0x10801u
 
+// host.h repeats the kernel region and host-function bases of recomp/layout.py's module base for its target.
+_Static_assert(RT_KERNEL_BASE == MOD_MAIN_BASE + 0x10000000ull && RT_HOSTFN_BASE == MOD_MAIN_BASE + 0x20000000ull,
+               "host.h and recomp/layout.py disagree on the fixed regions: lift for the same target as the runtime");
+
 static RtGuestLayout L;
 static uint64_t mods_lo, mods_hi;   // fixed module window
 static PlatMutex lock = PLAT_MUTEX_INIT;
@@ -57,6 +62,8 @@ static unsigned nstack_maps;
 static uint8_t *module_perm[MOD_COUNT];   // per data page of each module: perm | ATTR_PERMISSION_LOCKED
 
 static uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
+
+static int overlaps(uint64_t a, uint64_t n, uint64_t b, uint64_t m) { return a < b + m && b < a + n; }
 
 static int reserve_at(uint64_t at, uint64_t size, int watch) { return plat_mem_reserve(at, size, watch); }
 
@@ -106,6 +113,7 @@ static void thaw_range_locked(uint64_t a, uint64_t n, int why) {
 }
 
 void mem_thaw(uint64_t a, uint64_t n) {
+    plat_mem_unarm(a, n);
     plat_mutex_lock(&frz_lock);   // also when nothing is frozen: the hold keeps a read's buffer writable
     thaw_range_locked(a, n, 2);
     plat_mutex_unlock(&frz_lock);
@@ -197,8 +205,34 @@ static void protect(uint64_t a, uint64_t n, int prot, const char *what) {
 }
 
 // The process is re-run when a region is taken: Windows places DLLs, heaps and thread stacks at random addresses,
-// and a fresh process gets a fresh layout.
-static void reexec_or_fail(const char *what) {
+// and a fresh process gets a fresh layout. Not on Android (an app process is forked from zygote, so exec would start
+// app_process, not the app), nor with TOTK_NO_REEXEC set: there the failure lists what holds the range, so the
+// layout can be moved (recomp/layout.py).
+static void list_conflicts(uint64_t lo, uint64_t hi) {
+#ifdef __linux__
+    FILE *f = fopen("/proc/self/maps", "r");
+    char line[512];
+    while (f && fgets(line, sizeof line, f)) {
+        uint64_t a, b;
+        if (sscanf(line, "%" SCNx64 "-%" SCNx64, &a, &b) == 2 && overlaps(a, b - a, lo, hi - lo))
+            fprintf(stderr, "memory:   %s", line);
+    }
+    if (f) fclose(f);
+#endif
+    (void)lo, (void)hi;
+}
+
+static void reexec_or_fail(const char *what, uint64_t lo, uint64_t hi) {
+#ifdef __ANDROID__
+    int never = 1;
+#else
+    int never = cfg_get("TOTK_NO_REEXEC") != NULL;
+#endif
+    if (never) {
+        fprintf(stderr, "memory: %s is not free; the mappings in %#" PRIx64 "-%#" PRIx64 " are:\n", what, lo, hi);
+        list_conflicts(lo, hi);
+        rt_fatal("memory: %s is not free", what);
+    }
     const char *e = cfg_get("TOTK_REEXEC");
     int n = e ? atoi(e) : 0;
     if (n >= REEXEC_LIMIT) rt_fatal("memory: %s is not free after %d attempts", what, n);
@@ -215,18 +249,18 @@ void mem_init(void) {
     mods_hi = align_up(rt_layout[rt_layout_count - 1].base + rt_layout[rt_layout_count - 1].size, 0x10000);
     if (mods_hi > RT_KERNEL_BASE) rt_fatal("memory: modules end at %#llx, inside the kernel region",
                                            (unsigned long long)mods_hi);
-    if (!reserve_at(mods_lo, mods_hi - mods_lo, 0)) reexec_or_fail("the module window");
-    if (!reserve_at(RT_KERNEL_BASE, RT_KERNEL_SIZE, 0)) reexec_or_fail("the kernel region");
-    if (!reserve_at(RT_HOSTFN_BASE, RT_HOSTFN_SIZE, 0)) reexec_or_fail("the host-function window");
+    if (!reserve_at(mods_lo, mods_hi - mods_lo, 0)) reexec_or_fail("the module window", mods_lo, mods_hi);
+    if (!reserve_at(RT_KERNEL_BASE, RT_KERNEL_SIZE, 0)) reexec_or_fail("the kernel region", RT_KERNEL_BASE, RT_KERNEL_BASE + RT_KERNEL_SIZE);
+    if (!reserve_at(RT_HOSTFN_BASE, RT_HOSTFN_SIZE, 0)) reexec_or_fail("the host-function window", RT_HOSTFN_BASE, RT_HOSTFN_BASE + RT_HOSTFN_SIZE);
 
     // Stack and heap block, then the alias region above it, both searched below the module window.
     uint64_t low = 0, alias = 0;
     for (uint64_t at = LOW_SEARCH_FROM; at + LOW_SIZE <= mods_lo && !low; at += GiB)
         if (reserve_at(at, LOW_SIZE, 1)) low = at;
-    if (!low) reexec_or_fail("a 6 GiB stack and heap block below 2^39");
+    if (!low) reexec_or_fail("a 6 GiB stack and heap block below the module window", LOW_SEARCH_FROM, mods_lo);
     for (uint64_t at = align_up(low + LOW_SIZE, ALIAS_ALIGN); at + ALIAS_SIZE <= mods_lo && !alias; at += ALIAS_ALIGN)
         if (reserve_at(at, ALIAS_SIZE, 1)) alias = at;
-    if (!alias) reexec_or_fail("a 64 GiB alias region below 2^39");
+    if (!alias) reexec_or_fail("a 64 GiB alias region below the module window", low + LOW_SIZE, mods_lo);
 
     plat_mem_fault_hook(thaw_fault);   // before the crash handler
     alias_pages = calloc(ALIAS_PAGES, 1);
@@ -270,7 +304,6 @@ static uint64_t image_bytes(void) {
     return align_up(n, PAGE);
 }
 
-static int overlaps(uint64_t a, uint64_t n, uint64_t b, uint64_t m) { return a < b + m && b < a + n; }
 static int inside(uint64_t a, uint64_t n, RtRange r) { return a >= r.base && n <= r.size && a - r.base <= r.size - n; }
 
 // ---- 0x01 SetHeapSize

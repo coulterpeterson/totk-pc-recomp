@@ -14,7 +14,12 @@ from pathlib import Path
 
 from nso import Nso
 
-FIRST_BASE = 0x7000000000
+# PC: the top 64 GiB of a 39-bit space is free of system mappings. Android: ART, libraries, thread stacks and drivers
+# are placed top-down from the top of the (commonly 39-bit) user space, so the modules sit at 128 GiB instead, in
+# range nothing is placed in. runtime/host.h repeats the base for the kernel region (+0x10000000) and the host
+# function window (+0x20000000); runtime/memory.c asserts that both agree.
+FIRST_BASES = {'pc': 0x7000000000, 'android': 0x2000000000}
+FIRST_BASE = FIRST_BASES['pc']
 ALIGN = 0x200000
 ADDRESS_LIMIT = 1 << 39
 ORDER = ['main'] + [f'subsdk{i}' for i in range(10)] + ['sdk']
@@ -24,10 +29,10 @@ def align_up(v, a=ALIGN):
     return (v + a - 1) & ~(a - 1)
 
 
-def layout(exefs):
+def layout(exefs, target='pc'):
     """[(name, base, size)] for the modules present in the ExeFS directory, in load order."""
     exefs = Path(exefs)
-    out, base = [], FIRST_BASE
+    out, base = [], FIRST_BASES[target]
     for name in ORDER:
         path = exefs / name
         if not path.exists():

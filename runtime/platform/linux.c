@@ -874,13 +874,34 @@ int plat_file_list(const char *dir, const char *ext, int (*cb)(const char *name,
 // clears a page's protection on the first write without a round trip to us, and PAGEMAP_SCAN lists the pages whose
 // protection was cleared and protects them again. Without it (an older kernel), plat_mem_written reports the ranges as
 // untracked and the back end uploads them in full.
+//
+// Fallback when that is unavailable (Android kernels before 6.7, or TOTK_WW=mprotect): the watched pages are kept
+// read-only ("armed") while pstate says read-write. The first write faults; mp_fault makes the page writable and sets
+// its bit in mp_dirty. plat_mem_written lists the set bits and arms those pages again. Two writers racing on a page
+// both end with the page writable and the bit set. The orders that make that lose no write:
+//   fault:  mprotect writable, then set the bit. A write can only follow the mprotect, and the bit is set before the
+//           handler returns, so any scan that starts after a write completed finds the bit.
+//   scan:   clear the bits that were read, then mprotect those pages read-only (mp_written says why in this order).
+//           A bit set meanwhile for a page not read here stays set for the next scan.
+// Every page this arms or unarms is its own VMA once it differs from its neighbours; the cost is VMAs and faults,
+// both measured by runtime/mem_probe.c.
 
 #define PG 4096ull
 #define PS_LIMIT (1ull << 39)
 enum { PS_FREE, PS_RESERVED, PS_NONE, PS_READ, PS_RW };   // PS_NONE.. are committed: PLAT_PROT_* + PS_NONE
 static uint8_t *pstate;
 static int ww_fd = -1, pm_fd = -1;   // userfaultfd and /proc/self/pagemap; -1 when write watch is unavailable
-static PlatMutex vm_lock = PLAT_MUTEX_INIT;
+static PlatMutex vm_lock = PLAT_MUTEX_INIT;   // reservations; with mp_on also the changes of watched pages
+static int ww_tried, mp_on;          // mp_on: the mprotect write watch above
+static uint64_t *mp_dirty;           // a bit per 4 KiB page below PS_LIMIT
+static struct { uint64_t lo, hi; } mp_range[8];
+static int mp_ranges;
+
+static int mp_watched(uint64_t a) {
+    for (int i = 0; i < mp_ranges; i++)
+        if (a - mp_range[i].lo < mp_range[i].hi - mp_range[i].lo) return 1;
+    return 0;
+}
 
 static void ps_set(uint64_t addr, uint64_t n, uint8_t v) {
     if (addr < PS_LIMIT) memset(pstate + addr / PG, v, (size_t)((n + PG - 1) / PG));
@@ -910,7 +931,18 @@ int plat_mem_reserve(uint64_t addr, uint64_t n, int watch) {
         void *p = mmap(NULL, PS_LIMIT / PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
         pstate = p == MAP_FAILED ? NULL : p;
     }
-    if (watch && ww_fd < 0 && pm_fd < 0) ww_open();
+    if (watch && !ww_tried) {
+        ww_tried = 1;
+        const char *w = getenv("TOTK_WW");
+        if (!w || strcmp(w, "mprotect")) ww_open();
+        if (ww_fd < 0) {
+            mp_dirty = mmap(NULL, PS_LIMIT / PG / 8, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+            mp_on = mp_dirty != MAP_FAILED;
+            if (!mp_on) mp_dirty = NULL;
+            else fprintf(stderr, "platform: written memory is tracked by page protection\n");
+        }
+    }
     void *p = pstate && addr + n <= PS_LIMIT
                   ? mmap((void *)(uintptr_t)addr, n, PROT_NONE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0)
@@ -922,6 +954,7 @@ int plat_mem_reserve(uint64_t addr, uint64_t n, int watch) {
         // Transparent huge pages would populate (and count as written) 2 MiB at the first write of one page; writes are
         // tracked per 4 KiB page, as on Windows.
         if (watch) madvise(p, n, MADV_NOHUGEPAGE);
+        if (watch && mp_on && mp_ranges < 8) mp_range[mp_ranges].lo = addr, mp_range[mp_ranges++].hi = addr + n;
         struct uffdio_register reg = {.range = {addr, n}, .mode = UFFDIO_REGISTER_MODE_WP};
         if (watch && ww_fd >= 0 && ioctl(ww_fd, UFFDIO_REGISTER, &reg))
             fprintf(stderr, "platform: write watch over %#llx+%#llx failed (%s)\n", (unsigned long long)addr,
@@ -936,23 +969,93 @@ void *plat_mem_alloc(size_t n) {
     return p == MAP_FAILED ? NULL : p;
 }
 
+// With mp_on, a watched page that is logically read-write is armed (read-only) until its first write.
+static int real_prot(uint64_t addr, int prot) {
+    return prot == PLAT_PROT_RW ? (mp_on && mp_watched(addr) ? PROT_READ : PROT_READ | PROT_WRITE)
+           : prot == PLAT_PROT_READ ? PROT_READ : PROT_NONE;
+}
+
 int plat_mem_commit(uint64_t addr, size_t n) {
-    if (mprotect((void *)(uintptr_t)addr, n, PROT_READ | PROT_WRITE)) return 0;
-    ps_set(addr, n, PS_RW);
-    return 1;
+    if (mp_on) plat_mutex_lock(&vm_lock);
+    int ok = !mprotect((void *)(uintptr_t)addr, n, real_prot(addr, PLAT_PROT_RW));
+    if (ok) ps_set(addr, n, PS_RW);
+    if (mp_on) plat_mutex_unlock(&vm_lock);
+    return ok;
 }
 
 int plat_mem_decommit(uint64_t addr, uint64_t n) {
-    if (madvise((void *)(uintptr_t)addr, n, MADV_DONTNEED) || mprotect((void *)(uintptr_t)addr, n, PROT_NONE)) return 0;
-    ps_set(addr, n, PS_RESERVED);
-    return 1;
+    if (mp_on) plat_mutex_lock(&vm_lock);
+    int ok = !madvise((void *)(uintptr_t)addr, n, MADV_DONTNEED) && !mprotect((void *)(uintptr_t)addr, n, PROT_NONE);
+    if (ok) {
+        ps_set(addr, n, PS_RESERVED);
+        // Zero pages are not written pages (the userfaultfd path reports populated pages only).
+        for (uint64_t p = addr / PG; mp_on && mp_watched(addr) && p < (addr + n + PG - 1) / PG; p++)
+            __atomic_fetch_and(&mp_dirty[p / 64], ~(1ull << (p % 64)), __ATOMIC_RELAXED);
+    }
+    if (mp_on) plat_mutex_unlock(&vm_lock);
+    return ok;
 }
 
 int plat_mem_protect(uint64_t addr, uint64_t n, int prot) {
-    int p = prot == PLAT_PROT_RW ? PROT_READ | PROT_WRITE : prot == PLAT_PROT_READ ? PROT_READ : PROT_NONE;
-    if (mprotect((void *)(uintptr_t)addr, n, p)) return 0;
-    ps_set(addr, n, (uint8_t)(PS_NONE + prot));
+    if (mp_on) plat_mutex_lock(&vm_lock);
+    int ok = !mprotect((void *)(uintptr_t)addr, n, real_prot(addr, prot));
+    if (ok) ps_set(addr, n, (uint8_t)(PS_NONE + prot));
+    if (mp_on) plat_mutex_unlock(&vm_lock);
+    return ok;
+}
+
+void plat_mem_unarm(uint64_t addr, uint64_t n) {
+    if (!mp_on || !n) return;
+    plat_mutex_lock(&vm_lock);
+    for (uint64_t a = addr & ~(PG - 1); a < addr + n; a += PG)
+        if (mp_watched(a) && pstate[a / PG] == PS_NONE + PLAT_PROT_RW &&
+            !mprotect((void *)(uintptr_t)a, PG, PROT_READ | PROT_WRITE))
+            __atomic_fetch_or(&mp_dirty[a / PG / 64], 1ull << (a / PG % 64), __ATOMIC_RELEASE);
+    plat_mutex_unlock(&vm_lock);
+}
+
+// The SIGSEGV path of the mprotect write watch (see above): 1 when the fault was a first write to an armed page.
+// Signal context: no locks, only mprotect and an atomic.
+static int mp_fault(uint64_t addr) {
+    if (!mp_on || addr >= PS_LIMIT || !mp_watched(addr) || pstate[addr / PG] != PS_NONE + PLAT_PROT_RW) return 0;
+    if (mprotect((void *)(uintptr_t)(addr & ~(PG - 1)), PG, PROT_READ | PROT_WRITE)) return 0;
+    __atomic_fetch_or(&mp_dirty[addr / PG / 64], 1ull << (addr / PG % 64), __ATOMIC_RELEASE);
     return 1;
+}
+
+// plat_mem_written for the mprotect watch.
+static uint64_t mp_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset) {
+    uint64_t got = 0, p0 = addr / PG, p1 = (addr + n + PG - 1) / PG;
+    if (reset) plat_mutex_lock(&vm_lock);
+    for (uint64_t w = p0 / 64; w <= (p1 - 1) / 64 && got < max; w++) {
+        uint64_t bits = __atomic_load_n(&mp_dirty[w], __ATOMIC_ACQUIRE), take = 0;
+        if (w == p0 / 64) bits &= ~0ull << (p0 % 64);
+        if (w == (p1 - 1) / 64 && p1 % 64) bits &= (1ull << (p1 % 64)) - 1;
+        for (uint64_t b = bits; b && got < max; b &= b - 1) {
+            int i = __builtin_ctzll(b);
+            pages[got++] = (w * 64 + (uint64_t)i) * PG;
+            take |= 1ull << i;
+        }
+        if (!reset || !take) continue;
+        // Clear the bits, then arm. A write after the clear and before the arm is not faulted but is in the page when
+        // the caller reads it after this returns; a write after the arm faults and sets the bit again. (Arming first
+        // would let a fault between the two set a bit that the clear then erases: that write would be lost.)
+        // A page frozen or decommitted meanwhile is skipped (vm_lock) and needs no arming.
+        __atomic_fetch_and(&mp_dirty[w], ~take, __ATOMIC_ACQ_REL);
+        for (uint64_t b = take; b;) {
+            int i = __builtin_ctzll(b), j = i;
+            while (j < 64 && (b >> j & 1) && pstate[w * 64 + (uint64_t)j] == PS_NONE + PLAT_PROT_RW) j++;
+            if (j == i) j = i + 1;
+            else if (mprotect((void *)(uintptr_t)((w * 64 + (uint64_t)i) * PG), (size_t)(j - i) * PG, PROT_READ)) {
+                // vm.max_map_count reached: every armed page is a VMA of its own
+                fprintf(stderr, "platform: arming written pages failed (%s); see /proc/self/maps\n", strerror(errno));
+                abort();
+            }
+            b = j >= 64 ? 0 : b & (~0ull << j);
+        }
+    }
+    if (reset) plat_mutex_unlock(&vm_lock);
+    return got;
 }
 
 int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
@@ -969,6 +1072,7 @@ int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
 
 uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset) {
     if (!max || !n) return 0;
+    if (mp_on) return mp_written(addr, n, pages, max, reset);
     if (ww_fd < 0) return UINT64_MAX;
     struct page_region r[256];
     uint64_t got = 0;
@@ -1022,6 +1126,7 @@ static int fault_access(const ucontext_t *u) {
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *u = uc;
     int access = fault_access(u);
+    if (sig == SIGSEGV && access == 1 && mp_fault((uint64_t)(uintptr_t)si->si_addr)) return;
     if (sig == SIGSEGV && fault_hook && access == 1 && fault_hook((uint64_t)(uintptr_t)si->si_addr)) return;
 #if defined(__x86_64__)
     uintptr_t rip = (uintptr_t)u->uc_mcontext.gregs[REG_RIP];

@@ -2,7 +2,7 @@
 //
 // Guest addresses are host addresses. Every guest-visible region lies below 2^39 (IPC buffer descriptors carry 39
 // address bits). Fixed parts of the guest address map:
-//   modules           MOD_<X>_BASE from layout.h, from 0x70_0000_0000
+//   modules           MOD_<X>_BASE from layout.h, from 0x70_0000_0000 (Android 0x20_0000_0000)
 //   kernel region     RT_KERNEL_BASE, 256 MiB: TLR, TLS blocks, host objects the guest reads (mem_kernel_alloc)
 //   host functions    RT_HOSTFN_BASE, 1 MiB, never accessible: synthetic addresses of host functions
 // The stack, heap and alias regions are placed at start-up (mem_layout).
@@ -73,9 +73,17 @@ void rt_sha256(const void *p, size_t n, uint8_t out[32]);   // BCrypt; fatal if 
 
 // ---- guest address map (fixed part)
 #define RT_ADDRESS_LIMIT (1ull << 39)
+#ifdef __ANDROID__   // the base is recomp/layout.py FIRST_BASES['android'] + 0x10000000; memory.c asserts it
+#define RT_KERNEL_BASE 0x2010000000ull
+#else
 #define RT_KERNEL_BASE 0x7010000000ull
+#endif
 #define RT_KERNEL_SIZE 0x10000000ull
+#ifdef __ANDROID__
+#define RT_HOSTFN_BASE 0x2020000000ull
+#else
 #define RT_HOSTFN_BASE 0x7020000000ull
+#endif
 #define RT_HOSTFN_SIZE 0x100000ull
 
 // ---- AAPCS64 argument access for host functions (section 2.2)
@@ -306,6 +314,7 @@ void rt_boot(void);                                        // boot.c
 // Modes of totk.exe. main.c has run mem_init and parsed the paths; each mode calls ldr_load itself if it needs the
 // modules, registers its host functions, then seals (hostfn_seal, or implicitly at the first rt_call). Return the
 // process exit code.
+int probe_mem(void);                                       // mem_probe.c
 int probe_cfg(void);                                       // cfg_probe.c
 int probe_dpi(void);                                       // dpi_probe_win.c (Windows only)
 int probe_mods(void);                                      // mods_probe.c

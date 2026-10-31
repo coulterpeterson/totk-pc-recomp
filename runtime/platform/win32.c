@@ -619,6 +619,8 @@ static LONG CALLBACK fault_veh(EXCEPTION_POINTERS *ep) {
     return fault_hook((uint64_t)er->ExceptionInformation[1]) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
 
+void plat_mem_unarm(uint64_t addr, uint64_t n) { (void)addr, (void)n; }
+
 void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
     fault_hook = fn;
     AddVectoredExceptionHandler(1, fault_veh);
