@@ -1,12 +1,18 @@
-// SHA-256 (FIPS 180-4). The block function has two forms: one on the x86 SHA extensions (SHA-NI: Intel since Ice Lake
-// and Goldmont, AMD since Zen), which hashes the RomFS image at about the speed of a disk read, and portable C for CPUs
-// without them. sha256_selftest in the probes compares both against the FIPS test vectors.
+// SHA-256 (FIPS 180-4). The block function has three forms: one on the x86 SHA extensions (SHA-NI: Intel since Ice Lake
+// and Goldmont, AMD since Zen), which hashes the RomFS image at about the speed of a disk read, one on the ARMv8
+// SHA2 instructions, and portable C for CPUs without them. sha256_selftest in the probes compares both against the FIPS test vectors.
 #include "sha256.h"
 
 #include <string.h>
 
 #if defined(__x86_64__)
 #include <immintrin.h>
+#elif defined(__aarch64__)
+#include <arm_neon.h>
+#include <sys/auxv.h>
+#ifndef HWCAP_SHA2
+#define HWCAP_SHA2 (1 << 6)   // asm/hwcap.h, for headers that lack it
+#endif
 #endif
 
 static const uint32_t K[64] = {
@@ -75,11 +81,40 @@ __attribute__((target("sha,sse4.1"))) static void blocks_ni(uint32_t h[8], const
 }
 #endif
 
+#if defined(__aarch64__)
+// sha256h/sha256h2 take the state as ABCD and EFGH and four message words plus constants per call (four rounds);
+// sha256su0/su1 extend the schedule four words at a time. Words load big-endian: byte-reverse each 32-bit lane.
+__attribute__((target("sha2"))) static void blocks_arm(uint32_t h[8], const uint8_t *p, size_t n) {
+    uint32x4_t abcd = vld1q_u32(&h[0]), efgh = vld1q_u32(&h[4]);
+    for (; n; n--, p += 64) {
+        uint32x4_t w[4], a0 = abcd, e0 = efgh;
+        for (int i = 0; i < 4; i++) w[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 16 * i)));
+        for (int g = 0; g < 16; g++) {
+            if (g >= 4) {
+                uint32x4_t t = vsha256su0q_u32(w[g & 3], w[(g + 1) & 3]);
+                w[g & 3] = vsha256su1q_u32(t, w[(g + 2) & 3], w[(g + 3) & 3]);
+            }
+            uint32x4_t k = vaddq_u32(w[g & 3], vld1q_u32(&K[4 * g])), prev = abcd;
+            abcd = vsha256hq_u32(abcd, efgh, k);
+            efgh = vsha256h2q_u32(efgh, prev, k);
+        }
+        abcd = vaddq_u32(abcd, a0);
+        efgh = vaddq_u32(efgh, e0);
+    }
+    vst1q_u32(&h[0], abcd);
+    vst1q_u32(&h[4], efgh);
+}
+#endif
+
 static void blocks(uint32_t h[8], const uint8_t *p, size_t n) {
 #if defined(__x86_64__)
     static int ni = -1;
     if (ni < 0) ni = __builtin_cpu_supports("sha") && __builtin_cpu_supports("sse4.1");
     if (ni) return blocks_ni(h, p, n);
+#elif defined(__aarch64__)
+    static int sha2 = -1;
+    if (sha2 < 0) sha2 = (getauxval(AT_HWCAP) & HWCAP_SHA2) != 0;
+    if (sha2) return blocks_arm(h, p, n);
 #endif
     blocks_c(h, p, n);
 }

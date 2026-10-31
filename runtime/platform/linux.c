@@ -202,12 +202,21 @@ static void intr_handler(int sig, siginfo_t *si, void *uc) {
     PlatIntr *t = intr_me;
     ucontext_t *u = uc;
     if (!t) return;
+#if defined(__x86_64__)
     t->rip = (uint64_t)u->uc_mcontext.gregs[REG_RIP];
     t->rsp = (uint64_t)u->uc_mcontext.gregs[REG_RSP];
+#elif defined(__aarch64__)
+    t->rip = (uint64_t)u->uc_mcontext.pc;
+    t->rsp = (uint64_t)u->uc_mcontext.sp;
+#endif
     int32_t req = INTR_REQ;
     if (!__atomic_compare_exchange_n(&t->state, &req, INTR_STOPPED, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     while (__atomic_load_n(&t->state, __ATOMIC_ACQUIRE) != INTR_GO) plat_pause();
+#if defined(__x86_64__)
     if (t->to) u->uc_mcontext.gregs[REG_RIP] = (greg_t)t->to;
+#elif defined(__aarch64__)
+    if (t->to) u->uc_mcontext.pc = t->to;
+#endif
     __atomic_store_n(&t->state, INTR_IDLE, __ATOMIC_RELEASE);
 }
 
@@ -266,9 +275,11 @@ int plat_intr_resume(PlatIntr *t, uint64_t to) {
 }
 
 // ---- fibers: a stack switch of our own. glibc's swapcontext saves and restores the signal mask with a system call
-// on every switch, and the game switches fibers often. fiber_swap saves the callee-saved registers, the MXCSR and the
-// x87 control word on the current stack, stores the stack pointer in *save and loads the other one. A new fiber's
-// stack is laid out as fiber_swap leaves one, returning into fiber_entry, which calls fn(arg) (r12 and r13).
+// on every switch, and the game switches fibers often. fiber_swap saves the callee-saved registers and the FP control
+// state (x86-64: MXCSR and the x87 control word; AArch64: FPCR) on the current stack, stores the stack pointer in
+// *save and loads the other one. A new fiber's stack is laid out as fiber_swap leaves one, returning into
+// fiber_entry, which calls fn(arg) (x86-64: r12 and r13; AArch64: x19 and x20). x18, the platform register, is not
+// switched: plain Linux treats it as a scratch register, and bionic's shadow call stack is not set up for fibers.
 struct PlatFiber {
     void *sp;
     void *stack;   // mapped stack (NULL for a thread's own context)
@@ -277,6 +288,7 @@ struct PlatFiber {
 
 void plat_fiber_swap(void **save, void *load);
 void plat_fiber_entry(void);
+#if defined(__x86_64__)
 __asm__(".text\n"
         ".globl plat_fiber_swap\n"
         ".type plat_fiber_swap, @function\n"
@@ -314,6 +326,54 @@ __asm__(".text\n"
         "    callq *%r12\n"
         "    ud2\n"
         ".size plat_fiber_entry, .-plat_fiber_entry\n");
+#elif defined(__aarch64__)
+// Frame, 176 bytes: x19-x28, x29, x30, d8-d15, FPCR. Not an AAPCS64 call frame: the stack pointer is switched, so
+// the saved x30 is the return address of the fiber being left, and `ret` resumes the one being entered.
+__asm__(".text\n"
+        ".globl plat_fiber_swap\n"
+        ".type plat_fiber_swap, %function\n"
+        ".p2align 4\n"
+        "plat_fiber_swap:\n"
+        "    sub sp, sp, #176\n"
+        "    stp x19, x20, [sp, #0]\n"
+        "    stp x21, x22, [sp, #16]\n"
+        "    stp x23, x24, [sp, #32]\n"
+        "    stp x25, x26, [sp, #48]\n"
+        "    stp x27, x28, [sp, #64]\n"
+        "    stp x29, x30, [sp, #80]\n"
+        "    stp d8, d9, [sp, #96]\n"
+        "    stp d10, d11, [sp, #112]\n"
+        "    stp d12, d13, [sp, #128]\n"
+        "    stp d14, d15, [sp, #144]\n"
+        "    mrs x2, fpcr\n"
+        "    str x2, [sp, #160]\n"
+        "    mov x2, sp\n"
+        "    str x2, [x0]\n"
+        "    mov sp, x1\n"
+        "    ldr x2, [sp, #160]\n"
+        "    msr fpcr, x2\n"
+        "    ldp x19, x20, [sp, #0]\n"
+        "    ldp x21, x22, [sp, #16]\n"
+        "    ldp x23, x24, [sp, #32]\n"
+        "    ldp x25, x26, [sp, #48]\n"
+        "    ldp x27, x28, [sp, #64]\n"
+        "    ldp x29, x30, [sp, #80]\n"
+        "    ldp d8, d9, [sp, #96]\n"
+        "    ldp d10, d11, [sp, #112]\n"
+        "    ldp d12, d13, [sp, #128]\n"
+        "    ldp d14, d15, [sp, #144]\n"
+        "    add sp, sp, #176\n"
+        "    ret\n"
+        ".size plat_fiber_swap, .-plat_fiber_swap\n"
+        ".globl plat_fiber_entry\n"
+        ".type plat_fiber_entry, %function\n"
+        ".p2align 4\n"
+        "plat_fiber_entry:\n"
+        "    mov x0, x20\n"
+        "    blr x19\n"
+        "    brk #0\n"
+        ".size plat_fiber_entry, .-plat_fiber_entry\n");
+#endif
 
 static __thread PlatFiber *fiber_cur;
 static __thread PlatFiber fiber_own;
@@ -338,6 +398,7 @@ PlatFiber *plat_fiber_new(size_t stack, void (*fn)(void *arg), void *arg) {
     mprotect(m, 4096, PROT_NONE);
     f->stack = m, f->size = stack;
     uint64_t *top = (uint64_t *)(((uintptr_t)m + stack) & ~(uintptr_t)15);
+#if defined(__x86_64__)
     uint64_t *sp = top - 10;   // fpu state (2 words), r15, r14, r13, r12, rbx, rbp, return address, padding
     sp[0] = 0x037f;            // x87 control word: the default
     sp[1] = 0x1f80;            // MXCSR: the default
@@ -347,6 +408,13 @@ PlatFiber *plat_fiber_new(size_t stack, void (*fn)(void *arg), void *arg) {
     sp[6] = sp[7] = 0;         // rbx, rbp
     sp[8] = (uint64_t)(uintptr_t)plat_fiber_entry;
     sp[9] = 0;
+#elif defined(__aarch64__)
+    uint64_t *sp = top - 22;   // the 176-byte frame of fiber_swap: x19-x28, x29, x30, d8-d15, FPCR, padding
+    memset(sp, 0, 22 * sizeof *sp);   // FPCR 0 is the default
+    sp[0] = (uint64_t)(uintptr_t)fn;    // x19
+    sp[1] = (uint64_t)(uintptr_t)arg;   // x20
+    sp[11] = (uint64_t)(uintptr_t)plat_fiber_entry;   // x30, where fiber_swap's ret goes
+#endif
     f->sp = sp;
     return f;
 }
@@ -388,13 +456,24 @@ int plat_thread_join_ns(PlatThread *t, uint64_t ns) {
 void plat_thread_detach(PlatThread *t) { pthread_detach(t->t); }
 
 uint64_t plat_thread_affinity(PlatThread *t, uint64_t mask) {
-    pthread_t th = t ? t->t : pthread_self();
     cpu_set_t old, set;
+#ifdef __ANDROID__
+    // bionic's pthread_{get,set}affinity_np arrived late (API 36 assumed); the syscall wrappers take the kernel's id.
+    pid_t th = t ? t->tid : 0;
+    if (t && !th) return 0;   // not running yet: 0 would mean the calling thread
+    if (sched_getaffinity(th, sizeof old, &old)) return 0;
+#else
+    pthread_t th = t ? t->t : pthread_self();
     if (pthread_getaffinity_np(th, sizeof old, &old)) return 0;
+#endif
     CPU_ZERO(&set);
     for (int i = 0; i < 64; i++)
         if (mask >> i & 1) CPU_SET(i, &set);
+#ifdef __ANDROID__
+    if (sched_setaffinity(th, sizeof set, &set)) return 0;
+#else
     if (pthread_setaffinity_np(th, sizeof set, &set)) return 0;
+#endif
     uint64_t prev = 0;
     for (int i = 0; i < 64; i++)
         if (CPU_ISSET(i, &old)) prev |= 1ull << i;
@@ -921,18 +1000,41 @@ uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t m
 static int (*fault_hook)(uint64_t addr);
 static void (*crash_fn)(const PlatCrash *c);
 
+// What the faulting instruction did, as PlatCrash.access has it: 0 read, 1 write, 8 execute.
+static int fault_access(const ucontext_t *u) {
+#if defined(__x86_64__)
+    long err = u->uc_mcontext.gregs[REG_ERR];
+    return (err & 16) ? 8 : (err & 2) ? 1 : 0;
+#elif defined(__aarch64__)
+    // The kernel appends the fault's ESR to the signal frame. Data abort from EL0 (EC 0x24): WnR, bit 6, is 1 for a
+    // write. Instruction abort from EL0 (EC 0x20): execute. Without the record, report a write so the hook still
+    // gets its look: it declines addresses it does not own.
+    const struct _aarch64_ctx *h = (const struct _aarch64_ctx *)u->uc_mcontext.__reserved;
+    for (; h->magic; h = (const struct _aarch64_ctx *)((const char *)h + h->size)) {
+        if (h->magic != ESR_MAGIC) continue;
+        uint64_t esr = ((const struct esr_context *)h)->esr;
+        return (esr >> 26) == 0x20 ? 8 : (esr >> 26) == 0x24 && (esr & 64) ? 1 : 0;
+    }
+    return 1;
+#endif
+}
+
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *u = uc;
-    long err = u->uc_mcontext.gregs[REG_ERR];
-    if (sig == SIGSEGV && fault_hook && (err & 2) && fault_hook((uint64_t)(uintptr_t)si->si_addr)) return;
+    int access = fault_access(u);
+    if (sig == SIGSEGV && fault_hook && access == 1 && fault_hook((uint64_t)(uintptr_t)si->si_addr)) return;
+#if defined(__x86_64__)
     uintptr_t rip = (uintptr_t)u->uc_mcontext.gregs[REG_RIP];
+#elif defined(__aarch64__)
+    uintptr_t rip = (uintptr_t)u->uc_mcontext.pc;
+#endif
     Dl_info at, self;
     if (crash_fn && dladdr((void *)rip, &at) && dladdr((void *)plat_crash_hook, &self) && at.dli_fbase == self.dli_fbase) {
         PlatCrash c = {sig == SIGSEGV ? "access violation" : sig == SIGBUS ? "bus error"
                        : sig == SIGILL ? "illegal instruction" : "arithmetic exception",
                        (uint32_t)sig, rip, rip - (uintptr_t)self.dli_fbase, -1, 0};
         if (sig == SIGSEGV || sig == SIGBUS)
-            c.access = (err & 16) ? 8 : (err & 2) ? 1 : 0, c.addr = (uint64_t)(uintptr_t)si->si_addr;
+            c.access = access, c.addr = (uint64_t)(uintptr_t)si->si_addr;
         crash_fn(&c);
     }
     signal(sig, SIG_DFL);   // returns into the faulting instruction, which faults again with the default action

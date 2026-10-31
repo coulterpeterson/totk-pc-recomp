@@ -748,6 +748,9 @@ def main():
     ap.add_argument('--toolchain', type=Path, help='llvm-mingw directory (with bin/clang.exe) to build with instead of '
                                                    'MSYS2 UCRT64 clang; on Linux an LLVM directory (bin/clang, '
                                                    'bin/llvm-ar) instead of the clang on PATH')
+    ap.add_argument('--target', choices=('x86_64', 'aarch64'), default='x86_64',
+                    help='Linux: the CPU to build for (default x86_64). aarch64 compiles with -march=armv8.2-a+crc and '
+                         'writes build/<version>-aarch64 unless --out says otherwise')
     ap.add_argument('--ninja', type=Path, help='ninja.exe to build with (default: MSYS2 UCRT64, else bin/ninja.exe of the '
                                                'release folder)')
     ap.add_argument('--sysroot', type=Path, help='Linux: the glibc headers and libraries to compile and link against '
@@ -764,7 +767,9 @@ def main():
     set_cpu(args.cpu)
 
     gen = (args.gen or ROOT / 'generated' / args.version).resolve()
-    out = (args.out or ROOT / 'build' / args.version).resolve()
+    if args.target != 'x86_64' and WIN:
+        sys.exit('--target aarch64 builds for Linux only')
+    out = (args.out or ROOT / 'build' / (args.version + ('' if args.target == 'x86_64' else '-' + args.target))).resolve()
     extracted = None if args.exefs and args.romfs else work_dir() / 'extracted' / args.version
     paths = {'exefs': (args.exefs or extracted / 'exefs').resolve(),
              'romfs': (args.romfs or extracted / 'romfs').resolve(),
@@ -801,9 +806,18 @@ def main():
         # the libSDL3.so.0 beside it
         for lib in ('opus', 'vpx', 'zstd'):
             LINK_LIBS[LINK_LIBS.index(f'-l{lib}')] = f'-l:lib{lib}.a'
+    if args.target == 'aarch64':
+        # -ffixed-x18: kern_ap_stub (runtime/kernel.c) needs one register that interrupted generated code never holds
+        # a value in; on bionic x18 is reserved already.
+        for flags in (GEN_FLAGS, RT_FLAGS):
+            flags[:] = ['-march=armv8.2-a+crc' if f.startswith('-march=x86-64') else f for f in flags
+                        if not f.startswith('-DRT_CPU_LEVEL')]
+        GEN_FLAGS.append('-ffixed-x18')
+        for flags in (GEN_FLAGS, RT_FLAGS, LINK_FLAGS):
+            flags[:0] = ['--target=aarch64-linux-gnu']
     if args.sysroot and not WIN:
         # Every compile and the link: the game then needs no newer glibc than the sysroot's (the Steam Runtime's)
-        sysroot = ['--target=x86_64-linux-gnu', f'--sysroot={cmd_path(args.sysroot.resolve())}']
+        sysroot = [f'--target={args.target}-linux-gnu', f'--sysroot={cmd_path(args.sysroot.resolve())}']
         GEN_FLAGS[:0] = sysroot
         RT_FLAGS[:0] = sysroot
         LINK_FLAGS[:0] = sysroot

@@ -1,4 +1,4 @@
-// SHA-256 (FIPS 180-4), streaming. Uses the x86 SHA extensions when the CPU has them, portable C otherwise.
+// SHA-256 (FIPS 180-4), streaming. Uses the x86 SHA extensions or the ARMv8 SHA2 instructions when the CPU has them, portable C otherwise.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>

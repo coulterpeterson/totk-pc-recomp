@@ -23,6 +23,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
 
 #include "cfg.h"
 #include "host.h"
@@ -267,6 +271,7 @@ static void host_probe(Cpu *c) { host_probe_hits++; c->x[0] = 42; }
 #endif
 
 static void check_cpu(void) {
+#if defined(__x86_64__)
     __builtin_cpu_init();
 #if RT_CPU_LEVEL >= 3
     int ok = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2");
@@ -276,6 +281,13 @@ static void check_cpu(void) {
     int ok = __builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt");
     printf("cpu: x86-64-v2 (SSE4.2, POPCNT) %s\n", ok ? "present" : "MISSING");
     CHECK(ok, "the lifted code is built for x86-64-v2");
+#endif
+#elif defined(__aarch64__)
+    // build_game.py --target aarch64 compiles for armv8.2-a+crc: ASIMD, CRC32 and the LSE atomics (HWCAP_ATOMICS).
+    unsigned long hw = getauxval(AT_HWCAP);
+    int ok = (hw & HWCAP_ASIMD) && (hw & HWCAP_CRC32) && (hw & HWCAP_ATOMICS);
+    printf("cpu: armv8.2-a (ASIMD, CRC32, LSE) %s\n", ok ? "present" : "MISSING");
+    CHECK(ok, "the lifted code is built for armv8.2-a+crc");
 #endif
 }
 

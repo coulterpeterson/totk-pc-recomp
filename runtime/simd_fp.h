@@ -156,10 +156,17 @@ SN T FN(slow)(Cpu *c, int op, T a, T b, T d) {
 // FTZ|DAZ, which flushes denormal inputs and tiny results like ARM, but x86 detects tininess after rounding:
 // an exact result just below the smallest normal that rounds up to it is flushed on ARM only. The slow path
 // decides both cases with the operands flushed.
+#if defined(__x86_64__)
 #define FREDO(op, r) (FBAD(op, r) | (__builtin_elementwise_abs(r) == FN(fv)(MINN)))
 // The complement of FREDO for every op but RSQRTS, as one compare: |r| ordered and not the smallest normal (LLVM folds
 // it to fcmp one, a single ucomiss + jne for scalars and one vcmpps for vectors).
 #define FOK(r) ((__builtin_elementwise_abs(r) < FN(fv)(MINN)) | (__builtin_elementwise_abs(r) > FN(fv)(MINN)))
+#else
+// An AArch64 host detects tininess before rounding with FZ, exactly as the guest does: only NaN (and RSQRTS' infinity)
+// results need the second look.
+#define FREDO(op, r) FBAD(op, r)
+#define FOK(r) ((r) == (r))
+#endif
 SN T FN(redo)(Cpu *c, int op, T a, T b, T d, T r) {
     if (c->fpcr & FPCR_FZ) return FN(slow)(c, op, a, b, d);
     return FBAD(op, r) ? FN(fix)(c, op, a, b, d) : r;
@@ -187,7 +194,11 @@ SI VTU FN(vsel)(VTS m, VTU x, VTU y) { return (x & (VTU)m) | (y & ~(VTU)m); }
 
 SI VT FN(vflush)(VT a) {
     VTU u = (VTU)a;
+#if defined(__x86_64__)
     __asm__("" : "+x"(u));
+#else
+    __asm__("" : "+w"(u));
+#endif
     VTU mag = u & ~((VTU){} + SGN);
     VTS den = (mag != 0) & ((u & EXPM) == 0);
     return (VT)FN(vsel)(den, u & SGN, u);

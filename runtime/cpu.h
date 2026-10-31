@@ -44,7 +44,13 @@ static inline uint64_t rt_get_fpcr(void) { uint64_t v; __asm__ volatile("mrs %0,
 static inline uint64_t rt_get_fpsr(void) { uint64_t v; __asm__ volatile("mrs %0, fpsr" : "=r"(v)); return v; }
 static inline void rt_set_fpcr(uint64_t v) { __asm__ volatile("msr fpcr, %0" :: "r"(v)); }
 static inline void rt_set_fpsr(uint64_t v) { __asm__ volatile("msr fpsr, %0" :: "r"(v)); }
-static inline void rt_fpcr_sync(const Cpu *c) { (void)c; }
+// Code lifted with --simd=c keeps the guest FPCR in c->fpcr (as on x86-64, below). The host FPCR mirrors its FZ with
+// RMode = nearest, so plain host FP gives the ARM result outside the slow paths of runtime/simd.h. Same call sites.
+static inline void rt_fpcr_sync(const Cpu *c) {
+    uint64_t cur = rt_get_fpcr();
+    uint64_t want = (cur & ~((3ull << 22) | (1ull << 24))) | (c->fpcr & (1ull << 24));
+    if (cur != want) rt_set_fpcr(want);
+}
 #else
 // Host FP state is not the guest's here: code lifted with --simd=c keeps FPCR/FPSR in Cpu (c->fpcr, zeroed
 // with the Cpu), so the host-side reset in thread start-up has nothing to do.
@@ -358,8 +364,7 @@ static inline uint32_t sdiv32(uint32_t a, uint32_t b) {
     return (uint32_t)((int32_t)a / (int32_t)b);
 }
 
-// Portable FP/SIMD helpers for code lifted with --simd=c (default off AArch64; gen.py includes simd.h itself
-// in that mode, so AArch64 hosts can build it too).
-#if !defined(__cplusplus) && !defined(__aarch64__)
+// Portable FP/SIMD helpers for code lifted with --simd=c (the default; gen.py includes simd.h itself too).
+#if !defined(__cplusplus)
 #include "simd.h"
 #endif

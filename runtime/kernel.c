@@ -501,7 +501,7 @@ __asm__(".text\n"
         "    leaq 8(%rsp), %rsp\n"
         "    jmpq *-8(%rsp)\n"
         ".seh_endproc\n");
-#else
+#elif defined(__x86_64__)
 // The System V version: rsi and rdi are volatile there too, and the interrupted code may keep data in the 128 bytes
 // below its stack pointer (the red zone), so the return slot and the saves go below that. Without a red zone in the
 // way the slot is at entry - 136; the exit restores rsp to the entry value and jumps through the slot.
@@ -582,6 +582,80 @@ __asm__(".text\n"
         "    leaq 136(%rsp), %rsp\n"
         "    jmpq *-136(%rsp)\n"
         "    .cfi_endproc\n"
+        ".size kern_ap_stub, .-kern_ap_stub\n");
+#elif defined(__aarch64__)
+// The AArch64 version. The frame is 704 bytes: 128 skipped in case the interrupted leaf function keeps data below its
+// stack pointer (clang's AArch64 red zone, assumed), then 16 for a frame record (the caller's x29 and the interrupted
+// pc, so a stack walk sees the interrupted function as the caller), x0-x17, x30, NZCV, FPCR and v0-v7, v16-v31. The
+// callee-saved v8-v15 survive the C calls. x18 is the one register that is neither saved nor live: the final jump
+// needs a register holding the target, and the generated code is built with -ffixed-x18 (build_game.py) so it never
+// holds a value there. sub and add leave the flags alone.
+__asm__(".text\n"
+        ".globl kern_ap_stub\n"
+        ".type kern_ap_stub, %function\n"
+        ".p2align 4\n"
+        "kern_ap_stub:\n"
+        "    sub sp, sp, #704\n"
+        "    stp x0, x1, [sp, #16]\n"
+        "    stp x2, x3, [sp, #32]\n"
+        "    stp x4, x5, [sp, #48]\n"
+        "    stp x6, x7, [sp, #64]\n"
+        "    stp x8, x9, [sp, #80]\n"
+        "    stp x10, x11, [sp, #96]\n"
+        "    stp x12, x13, [sp, #112]\n"
+        "    stp x14, x15, [sp, #128]\n"
+        "    stp x16, x17, [sp, #144]\n"
+        "    mrs x0, nzcv\n"
+        "    mrs x1, fpcr\n"
+        "    stp x30, x0, [sp, #160]\n"
+        "    str x1, [sp, #176]\n"
+        "    str x29, [sp]\n"
+        "    mov x29, sp\n"
+        "    stp q0, q1, [sp, #192]\n"
+        "    stp q2, q3, [sp, #224]\n"
+        "    stp q4, q5, [sp, #256]\n"
+        "    stp q6, q7, [sp, #288]\n"
+        "    stp q16, q17, [sp, #320]\n"
+        "    stp q18, q19, [sp, #352]\n"
+        "    stp q20, q21, [sp, #384]\n"
+        "    stp q22, q23, [sp, #416]\n"
+        "    stp q24, q25, [sp, #448]\n"
+        "    stp q26, q27, [sp, #480]\n"
+        "    stp q28, q29, [sp, #512]\n"
+        "    stp q30, q31, [sp, #544]\n"
+        "    msr fpcr, xzr\n"
+        "    bl kern_ap_rip\n"
+        "    str x0, [sp, #8]\n"   // the frame record's return slot
+        "    bl kern_ap_yield\n"
+        "    ldr x1, [sp, #176]\n"
+        "    msr fpcr, x1\n"
+        "    ldp q0, q1, [sp, #192]\n"
+        "    ldp q2, q3, [sp, #224]\n"
+        "    ldp q4, q5, [sp, #256]\n"
+        "    ldp q6, q7, [sp, #288]\n"
+        "    ldp q16, q17, [sp, #320]\n"
+        "    ldp q18, q19, [sp, #352]\n"
+        "    ldp q20, q21, [sp, #384]\n"
+        "    ldp q22, q23, [sp, #416]\n"
+        "    ldp q24, q25, [sp, #448]\n"
+        "    ldp q26, q27, [sp, #480]\n"
+        "    ldp q28, q29, [sp, #512]\n"
+        "    ldp q30, q31, [sp, #544]\n"
+        "    ldp x30, x0, [sp, #160]\n"
+        "    msr nzcv, x0\n"
+        "    ldr x18, [sp, #8]\n"
+        "    ldr x29, [sp]\n"
+        "    ldp x0, x1, [sp, #16]\n"
+        "    ldp x2, x3, [sp, #32]\n"
+        "    ldp x4, x5, [sp, #48]\n"
+        "    ldp x6, x7, [sp, #64]\n"
+        "    ldp x8, x9, [sp, #80]\n"
+        "    ldp x10, x11, [sp, #96]\n"
+        "    ldp x12, x13, [sp, #112]\n"
+        "    ldp x14, x15, [sp, #128]\n"
+        "    ldp x16, x17, [sp, #144]\n"
+        "    add sp, sp, #704\n"
+        "    br x18\n"
         ".size kern_ap_stub, .-kern_ap_stub\n");
 #endif
 
