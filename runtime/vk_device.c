@@ -104,8 +104,27 @@ static int create_instance(void) {
 }
 
 static const char *const k_required_ext[] = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
-    VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME};
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME};
+
+// VK_EXT_external_memory_host is optional: without it (or with TOTK_FORCE_NO_EMH=1, which hides it to test that path)
+// the back end runs on shadow storage (vk_memory.c shadow_pool). That path exists wherever shadow mode can be on, so a
+// device lacking the extension is only skipped when shadow mode is off (Windows default, or TOTK_SHADOW=0).
+// Test switches have no cfg row (like TOTK_SHADOW): set and not "0".
+static int env_on(const char *name) {
+    const char *v = cfg_get(name);
+    return v && *v && strcmp(v, "0");
+}
+
+static int emh_usable(VkPhysicalDevice pd) {
+    if (env_on("TOTK_FORCE_NO_EMH")) return 0;
+    uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &n, NULL);
+    VkExtensionProperties *e = calloc(n ? n : 1, sizeof *e);
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &n, e);
+    int ok = has_ext(e, n, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    free(e);
+    return ok;
+}
 
 // Name of the first missing required extension, or NULL.
 static const char *missing_required(VkPhysicalDevice pd) {
@@ -117,6 +136,7 @@ static const char *missing_required(VkPhysicalDevice pd) {
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext && !miss; i++)
         if (!has_ext(e, n, k_required_ext[i])) miss = k_required_ext[i];
     free(e);
+    if (!miss && !emh_usable(pd) && !vk_mem_shadow_default()) miss = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME " (and shadow storage is off: TOTK_SHADOW)";
     return miss;
 }
 
@@ -193,6 +213,8 @@ static int pick_device(void) {
         }
     free(qp);
     rt_log("vk: using gpu %d: %s", best, g_vk.props.deviceName);
+    g_vk.has_external_memory_host = emh_usable(g_vk.phys);
+    vk_mem_set_host_import(g_vk.has_external_memory_host);
     vk_mem_class_log(&g_vk.props, &g_vk.mem_props);
     return 1;
 }
@@ -227,6 +249,9 @@ static int create_device(void) {
     const char *ext[48];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
+    if (g_vk.has_external_memory_host) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+    else rt_log("vk: %s: VK_EXT_external_memory_host not available (or TOTK_FORCE_NO_EMH); using shadow storage",
+                g_vk.props.deviceName);
 
     FeatureChain *c = calloc(1, sizeof *c);
     void **tail = &c->f2.pNext;
@@ -305,8 +330,15 @@ static int create_device(void) {
     else if (!h->samplerAnisotropy) miss = "samplerAnisotropy";
     else if (!h->independentBlend) miss = "independentBlend";
     else if (!h->geometryShader) miss = "geometryShader";
-    else if (!h->textureCompressionBC) miss = "textureCompressionBC";
-    if (miss) { rt_log("vk: required feature missing on %s: %s", g_vk.props.deviceName, miss); free(c); return 0; }
+    else if (!h->textureCompressionBC || env_on("TOTK_FORCE_NO_BC")) miss = "textureCompressionBC";
+    if (miss) {
+        rt_log("vk: required feature missing on %s: %s", g_vk.props.deviceName, miss);
+        if (!strcmp(miss, "textureCompressionBC"))
+            rt_log("vk: the game's BC1-BC7 textures have no fallback yet: this GPU is unsupported until a BC transcoder "
+                   "exists (docs/android.md section 4, \"BC fallback design\"); TOTK_FORCE_NO_BC=1 forces this path");
+        free(c);
+        return 0;
+    }
     if (!c->fault.deviceFault) g_vk.has_device_fault = 0;   // vkGetDeviceFaultInfoEXT needs the feature, not just the extension
     g_vk.has_buffer_device_address = c->f12.bufferDeviceAddress;
     g_vk.has_astc_ldr = h->textureCompressionASTC_LDR;

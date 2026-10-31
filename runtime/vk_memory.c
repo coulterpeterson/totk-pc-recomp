@@ -1165,6 +1165,19 @@ static PlatMutex mirror_stat_lock = PLAT_MUTEX_INIT;
 static volatile int64_t m_live_n, m_live_bytes, m_refused_n[MR_N], m_refused_bytes[MR_N];
 static volatile int64_t m_flush_calls, m_flush_bytes, v_pages, v_skipped, v_mismatch;
 
+static int host_import = 1;   // the device has VK_EXT_external_memory_host (vk_mem_set_host_import)
+
+void vk_mem_set_host_import(int ok) { host_import = ok; }
+
+int vk_mem_shadow_default(void) {
+    const char *sh = cfg_get("TOTK_SHADOW");
+#ifdef _WIN32
+    return sh && *sh ? strcmp(sh, "0") != 0 : plat_is_wine();
+#else
+    return !sh || !*sh || strcmp(sh, "0");
+#endif
+}
+
 static void mirror_mode(int discrete) {
     const char *e = cfg_value("TOTK_MEMORY");
     int mode = discrete ? 1 : 0;   // 0 import, 1 mirror, 2 verify
@@ -1186,11 +1199,11 @@ static void mirror_mode(int discrete) {
     freeze_idle = fi && *fi ? atoi(fi) : 60;
     if (freeze_idle < 0) freeze_idle = 0;
     const char *sh = cfg_get("TOTK_SHADOW");
-#ifdef _WIN32
-    shadow_on = sh && *sh ? strcmp(sh, "0") != 0 : plat_is_wine();
-#else
-    shadow_on = !sh || !*sh || strcmp(sh, "0");
-#endif
+    shadow_on = vk_mem_shadow_default();
+    if (!host_import) {   // pick_device only lets such a device through when shadow_on is already set
+        shadow_on = 1;
+        rt_log("mem: VK_EXT_external_memory_host is not available: shadow storage is the only CPU-visible pool path");
+    }
     if (shadow_on) rt_log("mem: shadow storage: CPU-visible pools are host-visible copies of guest memory, not imports%s",
                           sh && *sh ? " (TOTK_SHADOW)" : "");
     rt_log("mem: mode %s (%s): %s", mode == 2 ? "verify" : mode ? "mirror" : "import", why,

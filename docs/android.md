@@ -130,7 +130,8 @@ Android problems:
 
 Required by code (`vk_device.c`):
 - Vulkan 1.3 (`pick_device`: devices below 1.3 are skipped).
-- Extensions `k_required_ext`: swapchain, push descriptor, `VK_EXT_depth_clip_control`, `VK_EXT_external_memory_host`.
+- Extensions `k_required_ext`: swapchain, push descriptor, `VK_EXT_depth_clip_control`. `VK_EXT_external_memory_host` is
+  optional (milestone 2, below).
 - Features in `create_device`: timelineSemaphore, dynamicRendering, synchronization2,
   shaderStorageImageWriteWithoutFormat, depthClipControl, shaderInt64, samplerAnisotropy, independentBlend,
   geometryShader, **textureCompressionBC**.
@@ -144,7 +145,7 @@ Likely availability on phones. None of this was checked here (assumption); read 
 - Vulkan 1.3 itself: Adreno 7xx and 8xx, Mali-G7xx Valhall (5th gen) on current drivers, Xclipse 920 and later.
   Older Adreno 6xx and Mali-G5x/G7x Bifrost drivers often stop at 1.1/1.2.
 - `VK_EXT_external_memory_host`: Turnip (open Mesa) has it; for Qualcomm's and Arm's proprietary drivers I do not know.
-  It is a hard requirement here, so an unknown means a probe app first.
+  No longer a requirement (milestone 2 below); the probe app logs it per device.
 - `VK_EXT_graphics_pipeline_library`: Adreno recent drivers (assumption), Mali newer drivers (assumption). Optional.
 - **BC textures: the largest gap.** `textureCompressionBC` is demanded, and `vk_formats.c` maps the game's BC1-BC7
   formats straight to Vulkan BC formats. Adreno reports it; Mali Valhall mostly does not (assumption). The existing
@@ -158,6 +159,30 @@ Likely availability on phones. None of this was checked here (assumption); read 
   (`shadow_pool`, `TOTK_SHADOW`, default on for non-Windows) needs no host-pointer import. So the hard
   `VK_EXT_external_memory_host` requirement can be relaxed when shadow mode is on: `k_required_ext` and
   `import_pool` become conditional. On UMA, shadow copies are plain extra RAM (section 3.5).
+**Milestone 2 as implemented (`vk_device.c`, `vk_memory.c`, `android_main.c`).**
+- `VK_EXT_external_memory_host` is optional. `emh_usable` checks it; `missing_required` skips a device without it only
+  when shadow storage is off (`vk_mem_shadow_default`: `TOTK_SHADOW`, default on except Windows). `create_device`
+  enables the extension when present (desktop behaviour unchanged), else logs `vk: <gpu>: VK_EXT_external_memory_host
+  not available ...; using shadow storage`; `vk_mem_set_host_import(0)` then forces `shadow_on` and `mirror_mode`
+  logs `mem: ... shadow storage is the only CPU-visible pool path`. `import_pool` already routed to `shadow_pool`.
+  `min_imported_host_alignment` stays 0 and is only read on the import path.
+- BC stays required. The code has no BC decoder or transcoder (only ASTC to RGBA8/BC3 in `vk_astc.c`, `tex_astc.c`),
+  so no honest cheap fallback exists. A device without `textureCompressionBC` is rejected with
+  `required feature missing ... textureCompressionBC` and a line pointing here. Not built speculatively.
+- Test switches (no cfg row, set and not `0`): `TOTK_FORCE_NO_EMH=1` hides the extension, `TOTK_FORCE_NO_BC=1`
+  makes the BC check fail (the last one can only exercise the error path).
+- Probe (`android_main.c`) logs one logcat line each: external_memory_host, graphics_pipeline_library (extension and
+  feature), textureCompressionBC, textureCompressionASTC_LDR, shaderInt64, maxStorageBufferRange, each memory heap.
+
+**BC fallback design (not implemented; needed when the sweep finds phones without BC).** Per BC texture upload in
+`vk_texture.c`, where `tex_vk_format` returns `VK_FORMAT_BC*`: (1) when `!features.textureCompressionBC`, pick the
+target by `vk_astc_native`-style probing: ASTC 4x4 if sampled (same 8/16-byte blocks, 4x4 footprint, so the mip and
+copy layout in `vk_texture.c` stay valid) else RGBA8 (BC6H to RGBA16F; 4x or 8x the memory). (2) Transcoding by a
+compute pass modelled on `vk_astc.c` (`astc_decode_spv.h` path): BC1-5 to RGBA8 are simple per-block decodes; BC7
+(8 modes) and BC6H (14 modes) are the bulk. BC to ASTC re-encode is lossy for BC7 and needs an encoder; RGBA8 decode
+is exact and is the first step. (3) `TexVkFormat` gets a `bc_decode` flag like `astc_bw`, and `tex_vk_format_supported`
+accepts the substitute. Size: BC1-5 ~300 lines of GLSL, BC6H/7 ~600 more. Count BC formats by mip bytes in the RomFS
+first, and test against the CPU decode of the same blocks.
 - Present: `gfx_present.c` already passes `caps.currentTransform` as `preTransform`. Rotation handling in the
   renderer and the FSR present (`vk_fsr.c`) must be checked on a rotated surface. Surface loss on background must
   destroy and rebuild the swapchain (`gfx_window_sdl.c` handles focus only, no
@@ -222,7 +247,7 @@ Proposed split:
 | # | Milestone | Size | First verifiable test |
 |---|---|---|---|
 | 1 | aarch64 Linux build (glibc, any ARM Linux box or VM). Items of section 1: FP control, `simd.h` rounding, fiber asm, `kern_ap_stub`, `intr_handler`, `fault_handler`, `plat_pause`, flags, `ov_movie.c`, `sha256.c`. | M | `tests/diff/*.py` (lift, simd, atomic) and `tests/jumptables_check.py` (0 disagreements on 1.2.1 and 1.4.3) pass on the aarch64 host; the probes built from `kernel_probe.c` pass. |
-| 2 | Vulkan requirements relaxed behind capability checks: BC optional with a software or compute fallback decision, `external_memory_host` optional under shadow mode, GPL optional (already). A probe APK or `vulkaninfo` sweep over target devices decides which BC path is needed. | M | A desktop GPU run with `TOTK_SHADOW=1` and BC forced off reaches the same frames as before (`--probe-vkexec`, `--probe-nvn-tex`); the sweep lists the extensions and features of each phone. |
+| 2 | Vulkan requirements relaxed behind capability checks: BC optional with a software or compute fallback decision, `external_memory_host` optional under shadow mode, GPL optional (already). A probe APK or `vulkaninfo` sweep over target devices decides which BC path is needed. | M | A desktop GPU run with `TOTK_SHADOW=1` and `TOTK_FORCE_NO_EMH=1` reaches (BC cannot be forced off: no fallback, see section 4) the same frames as before (`--probe-vkexec`, `--probe-nvn-tex`); the sweep lists the extensions and features of each phone. |
 | 3 | Android memory layout: new `FIRST_BASE`, no `plat_reexec`, early reservation, mprotect or card-marking write tracking behind `plat_mem_written`. | M | A native test app (SDL Activity, no game) runs `mem_init`, reserves the full layout, writes pages and gets them back from `mem_written_pages`; `/proc/self/maps` shows VMA count. |
 | 4 | NDK build and APK skeleton: `build_game.py --target android-arm64`, `libmain.so`, SDL3 Activity, logcat as the log, headless (`gfx_null.c`). | M | Real ExeFS lifted for the Android layout; the app boots the guest to the first `nn::` service calls and prints the same early log lines as the PC build (`totk.log`). |
 | 5 | Storage: fd-based RomFS and ExeFS access, PC-side packer, the existing hash checks. | S | On the phone `main.c` start checks verify the RomFS hashes (`expected-v*.json` set), no file path outside app storage. |

@@ -85,9 +85,20 @@ int main(int argc, char *argv[])
     vkEnumeratePhysicalDevices(instance, &gpu_count, &gpu);
 
     VkPhysicalDeviceProperties props;
-    VkPhysicalDeviceFeatures features;
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT,
+    };
+    VkPhysicalDeviceFeatures2 features2 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = &gpl,
+    };
+    VkPhysicalDeviceMemoryProperties mem;
     vkGetPhysicalDeviceProperties(gpu, &props);
-    vkGetPhysicalDeviceFeatures(gpu, &features);
+    vkGetPhysicalDeviceMemoryProperties(gpu, &mem);
+    if (props.apiVersion >= VK_API_VERSION_1_1) {
+        vkGetPhysicalDeviceFeatures2(gpu, &features2);   // gpl stays zero where the extension is absent
+    }
+    const VkPhysicalDeviceFeatures *features = &features2.features;
 
     uint32_t device_ext_count = 0;
     vkEnumerateDeviceExtensionProperties(gpu, NULL, &device_ext_count, NULL);
@@ -102,11 +113,20 @@ int main(int argc, char *argv[])
          VK_API_VERSION_MINOR(api_version), VK_API_VERSION_PATCH(api_version));
     LOGI("device: %s (API %u.%u.%u)", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
          VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion));
-    LOGI("VK_EXT_external_memory_host: %s",
+    int has_gpl = has_extension(device_exts, device_ext_count, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+    LOGI("VK_EXT_external_memory_host: %s (absent: shadow storage)",
          yes_no(has_extension(device_exts, device_ext_count, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME)));
-    LOGI("VK_EXT_graphics_pipeline_library: %s",
-         yes_no(has_extension(device_exts, device_ext_count, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)));
-    LOGI("textureCompressionASTC_LDR: %s", yes_no(features.textureCompressionASTC_LDR));
+    LOGI("VK_EXT_graphics_pipeline_library: ext %s, feature %s", yes_no(has_gpl),
+         yes_no(has_gpl && gpl.graphicsPipelineLibrary));
+    LOGI("textureCompressionBC: %s (absent: unsupported until a BC transcoder exists)",
+         yes_no(features->textureCompressionBC));
+    LOGI("textureCompressionASTC_LDR: %s", yes_no(features->textureCompressionASTC_LDR));
+    LOGI("shaderInt64: %s", yes_no(features->shaderInt64));
+    LOGI("maxStorageBufferRange: %u", props.limits.maxStorageBufferRange);
+    for (uint32_t i = 0; i < mem.memoryHeapCount; i++) {
+        LOGI("memory heap %u: %llu MiB%s", i, (unsigned long long)(mem.memoryHeaps[i].size >> 20),
+             (mem.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? " device-local" : "");
+    }
 
     result = 0;
 
