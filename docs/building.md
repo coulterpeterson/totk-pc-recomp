@@ -253,6 +253,12 @@ command line goes through the launch intent; quote it for the device's shell:
 adb shell "am start -n com.totkrecomp/.MainActivity --es args '--probe-kernel'"
 ```
 
+A GPU driver of your own, such as a Mesa Turnip build for Adreno GPUs (which has the BC texture formats Qualcomm's
+driver lacks), goes into `gpu_driver/` of the data folder (`tools/install_android.py --gpu-driver FILE`; `--gpu-driver
+system` removes it). The app copies it to its private storage and calls it directly, without the system's Vulkan
+loader (`TOTK_VK_DRIVER`, `runtime/gfx_window_sdl.c`). That path is checked with Mesa's lavapipe on ARM Linux; whether
+a given Turnip build loads that way, without libadrenotools' linker namespace help, is still to be tried on a device.
+
 Shaders are translated on the device the first time they are met (the translator runs from the APK's native library
 folder), so the first minutes stutter until the cache in the data folder fills.
 

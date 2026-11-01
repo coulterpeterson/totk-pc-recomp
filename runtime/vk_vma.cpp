@@ -3,5 +3,9 @@
 #define VMA_IMPLEMENTATION
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#ifdef RT_VOLK
+#include "third_party/volk/volk.h"   // VMA's static functions are then volk's pointers (vk.h)
+#else
 #include <vulkan/vulkan.h>
+#endif
 #include "vk_mem_alloc.h"

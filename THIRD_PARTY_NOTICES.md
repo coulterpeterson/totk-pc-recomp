@@ -41,6 +41,7 @@ Code copied or adapted from another project is listed here with its source, the 
 | Zstandard 1.5.7 (MSYS2 `mingw-w64-ucrt-x86_64-zstd`), static link | https://github.com/facebook/zstd, Copyright (c) Meta Platforms, Inc. and affiliates | BSD-3-Clause | `runtime/resolution.c` (the HeapDef table), `runtime/ov_zstd.c` (the game's zstd frames decoded on the host) |
 | musl `fma.c`, `fmaf.c` and `scalbn.c`, adapted into one file for the x86-64-v2 build | https://github.com/kraj/musl @ `5a56ad13e1e0790c06122978aad2a14d6b9efc1a` (mirror of https://git.musl-libc.org/cgit/musl), Copyright (c) 2005-2020 Rich Felker and contributors | MIT | `runtime/fma.c` (the correctly rounded fma/fmaf the FP lowering needs on CPUs without FMA3) |
 | bcdec 0.98.5, BC1-BC7 block decoders (header-only, `BCDEC_IMPLEMENTATION` in `runtime/tex_bc.c`) | https://github.com/iOrange/bcdec @ `80859ed3b7afb1c527a2a99d70c61457bea72d0c`, Copyright (c) 2022 Sergii Kudlai | MIT (or the Unlicense, its alternative) | `runtime/third_party/bcdec/` (unmodified, with its `LICENSE`); `runtime/tex_bc.c` decodes BC textures for GPUs without BC formats |
+| volk, the Vulkan meta-loader | https://github.com/zeux/volk @ `54fc0d7a72887cbfc5b030d26897b2b40ac53fb8` (tag `vulkan-sdk-1.4.363.0`), Copyright (c) 2018-2026 Arseny Kapoulkine | MIT | `runtime/third_party/volk/` (`volk.h`, `volk.c`, unmodified, with its `LICENSE.md`); `runtime/vk_volk.c` builds it for the Android and ARM Linux builds, which take every Vulkan function through it |
 
 ## Compiler runtime in a source build
 

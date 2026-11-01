@@ -724,6 +724,12 @@ ANDROID_API = 33   # Android 13: the first whose libvulkan.so exports the Vulkan
 ANDROID_DEPS = ROOT / 'toolchain' / 'android' / 'arm64-v8a'   # tools/build_android_deps.py
 
 
+def volk_flags():
+    """Vulkan through volk (runtime/vk.h RT_VOLK; ImGui's back end too): the functions come from the driver SDL loads,
+    the system's or TOTK_VK_DRIVER's (runtime/gfx_window_sdl.c), so a driver library can stand in for the loader."""
+    RT_FLAGS.extend(['-DRT_VOLK', '-DIMGUI_IMPL_VULKAN_USE_VOLK', f'-I {cmd_path(RUNTIME / "third_party" / "volk")}'])
+
+
 def android_toolchain(ndk):
     """Point the build at the NDK's clang and the libraries of tools/build_android_deps.py, and make the link a shared
     library: SDLActivity loads libtotk.so and calls its SDL_main."""
@@ -753,7 +759,8 @@ def android_toolchain(ndk):
     # The link runs through clang, not clang++, so the C++ runtime of the menu and VMA is named here: the NDK's static
     # libc++, so the APK needs no libc++_shared.so beside it.
     LINK_LIBS = ['-lSDL3', '-l:libopus.a', '-l:libvpx.a', '-l:libzstd.a', '-l:libc++_static.a', '-l:libc++abi.a',
-                 '-lvulkan', '-landroid', '-llog', '-lm', '-ldl']
+                 '-landroid', '-llog', '-lm', '-ldl']   # no -lvulkan: volk takes the functions from the loaded driver
+    volk_flags()
 
 
 def main():
@@ -856,6 +863,7 @@ def main():
     if args.target == 'android':
         android_toolchain(args.ndk)
     elif args.target == 'aarch64':
+        volk_flags()
         # -ffixed-x18: kern_ap_stub (runtime/kernel.c) needs one register that interrupted generated code never holds
         # a value in; on bionic x18 is reserved already.
         for flags in (GEN_FLAGS, RT_FLAGS):

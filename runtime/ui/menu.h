@@ -16,7 +16,11 @@
 // overlay functions by the present path under its lock. ImGui itself runs on the present path only.
 #pragma once
 #include <stdint.h>
+#ifdef RT_VOLK
+#include "../third_party/volk/volk.h"   // as vk.h: the functions come from the loaded driver
+#else
 #include <vulkan/vulkan.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

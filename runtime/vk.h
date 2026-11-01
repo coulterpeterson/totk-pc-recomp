@@ -1,6 +1,13 @@
 // Vulkan-internal header of the graphics layer. Host code only; the guest never sees it.
 #pragma once
+#ifdef RT_VOLK
+// The Vulkan functions are pointers volk fills from the driver SDL loaded (gfx_window_sdl.c vk_driver_path: the system's,
+// or a driver library named by TOTK_VK_DRIVER), not the loader's exports (tools/build_game.py sets RT_VOLK for Android
+// and ARM Linux).
+#include "third_party/volk/volk.h"
+#else
 #include <vulkan/vulkan.h>
+#endif
 #include <stdint.h>
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
@@ -146,6 +153,7 @@ int vk_present_captured(const uint8_t **px, int *w, int *h, VkFormat *fmt);
 // The window system's part of device creation (gfx_window_win.c with Win32, gfx_window_sdl.c with SDL): the instance
 // extensions a surface needs (their count, at most max), and whether a queue family of pd can present to it.
 int gfx_window_vk_extensions(const char **out, int max);
+PFN_vkGetInstanceProcAddr gfx_window_vk_loader(void);   // the vkGetInstanceProcAddr of the driver SDL loaded (RT_VOLK)
 int gfx_window_vk_presentable(VkInstance inst, VkPhysicalDevice pd, uint32_t family);
 void gfx_window_resize(int client_w, int client_h);   // programmatic resize; returns after the swapchain is rebuilt
 void gfx_vsync_bind_counter(volatile int32_t *counter);  // host-side stand-in for a bound event: incremented per tick

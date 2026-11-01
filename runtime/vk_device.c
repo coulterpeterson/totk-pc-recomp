@@ -70,6 +70,11 @@ static int create_instance(void) {
     mesa_cache_beside_exe();
     const char *ext[12];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
+#ifdef RT_VOLK
+    PFN_vkGetInstanceProcAddr gipa = gfx_window_vk_loader();
+    if (!gipa) { rt_log("vk: no Vulkan driver loaded (see the gfx: lines above)"); return 0; }
+    volkInitializeCustom(gipa);   // the global functions; the instance's and the device's follow their creation
+#endif
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     int validate = cfg_bool("TOTK_VK_VALIDATION");
     if (validate && !layer_present(layers[0])) {
@@ -88,6 +93,9 @@ static int create_instance(void) {
     rdoc_init();
     VkResult r = vkCreateInstance(&ci, NULL, &g_vk.instance);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateInstance failed (%d); is a Vulkan 1.3 driver installed?", (int)r); return 0; }
+#ifdef RT_VOLK
+    volkLoadInstance(g_vk.instance);
+#endif
     g_vk.validation = validate;
     if (validate) {
         PFN_vkCreateDebugUtilsMessengerEXT f =
@@ -367,6 +375,9 @@ static int create_device(void) {
     VkResult r = vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.device);
     free(c);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateDevice failed (%d)", (int)r); return 0; }
+#ifdef RT_VOLK
+    volkLoadDevice(g_vk.device);   // the device's functions without the instance's dispatch
+#endif
     vkGetDeviceQueue(g_vk.device, g_vk.gfx_family, 0, &g_vk.gfx_queue);
     if (g_vk.xfer_family != g_vk.gfx_family) vkGetDeviceQueue(g_vk.device, g_vk.xfer_family, 0, &g_vk.xfer_queue);
     else { g_vk.xfer_queue = g_vk.gfx_queue; g_vk.xfer_shared = 1; }

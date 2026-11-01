@@ -17,6 +17,9 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#ifdef RT_VOLK
+#include <dlfcn.h>
+#endif
 
 #include "cfg.h"
 #include "gfx.h"
@@ -25,6 +28,9 @@
 #include "input_sdl.h"
 #include "ui/menu.h"
 #include "vk.h"
+#if defined(RT_VOLK) && defined(__ANDROID__)
+#include <vulkan/vulkan_android.h>   // after vk.h: the core types first
+#endif
 #include "platform/platform.h"
 
 static SDL_Window *g_win;
@@ -252,8 +258,59 @@ static int video_up(void) {
     return g_video_ok;
 }
 
+#ifdef RT_VOLK
+// ---- TOTK_VK_DRIVER: a Vulkan driver library called directly, without the system's loader
+// A Mesa build (Turnip for Adreno GPUs; lavapipe stands in for it on a desktop) exports only the driver interface
+// (vk_icdGetInstanceProcAddr, vk_icdNegotiateLoaderICDInterfaceVersion), so the runtime acts as the loader: it opens
+// the library, agrees an interface version (5 and later: the driver makes the surfaces itself), takes the functions
+// from it through volk (vk.h RT_VOLK), and makes the window's surface with them. SDL keeps the system's loader for
+// its window. A relative path is beside the executable; android.c points it at a driver the player put in gpu_driver/.
+// Surfaces for SDL's android and offscreen video drivers only.
+typedef VkResult (VKAPI_PTR *PFN_negotiate)(uint32_t *version);
+static PFN_vkGetInstanceProcAddr g_driver_gipa;
+static int g_driver_tried;
+
+static int driver_load(void) {
+    if (g_driver_tried) return g_driver_gipa != NULL;
+    g_driver_tried = 1;
+    const char *v = cfg_get("TOTK_VK_DRIVER");
+    if (!v || !*v) return 0;
+    char path[PLAT_PATH_MAX * 2], exe[PLAT_PATH_MAX * 2];
+    char *cut = v[0] != '/' && plat_exe_path(exe, sizeof exe) ? plat_last_sep(exe) : NULL;
+    if (cut) *cut = 0, snprintf(path, sizeof path, "%s/%s", exe, v);
+    else snprintf(path, sizeof path, "%s", v);
+    void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!lib) rt_fatal("gfx: TOTK_VK_DRIVER %s cannot be loaded: %s", path, dlerror());
+    g_driver_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vk_icdGetInstanceProcAddr");
+    if (!g_driver_gipa) g_driver_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
+    if (!g_driver_gipa) rt_fatal("gfx: TOTK_VK_DRIVER %s exports no vkGetInstanceProcAddr", path);
+    uint32_t version = 7;
+    PFN_negotiate negotiate = (PFN_negotiate)dlsym(lib, "vk_icdNegotiateLoaderICDInterfaceVersion");
+    if (negotiate && negotiate(&version) != VK_SUCCESS) rt_fatal("gfx: TOTK_VK_DRIVER %s refused the interface", path);
+    rt_log("gfx: Vulkan driver %s called directly (TOTK_VK_DRIVER, interface %u), not the system's loader", path,
+           negotiate ? version : 0);
+    return 1;
+}
+
+PFN_vkGetInstanceProcAddr gfx_window_vk_loader(void) {
+    if (!video_up()) return NULL;
+    return driver_load() ? g_driver_gipa : (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
+}
+#endif
+
 int gfx_window_vk_extensions(const char **out, int max) {
     if (!video_up()) return 0;
+#ifdef RT_VOLK
+    if (driver_load()) {
+        const char *vd = SDL_GetCurrentVideoDriver();
+        int android = vd && !strcmp(vd, "android"), headless = vd && !strcmp(vd, "offscreen");
+        if (!android && !headless) rt_fatal("gfx: TOTK_VK_DRIVER makes surfaces for SDL's android and offscreen video only");
+        if (max < 2) return 0;
+        out[0] = VK_KHR_SURFACE_EXTENSION_NAME;
+        out[1] = android ? "VK_KHR_android_surface" : VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME;
+        return 2;
+    }
+#endif
     Uint32 n = 0;
     const char *const *ext = SDL_Vulkan_GetInstanceExtensions(&n);
     if (!ext) {
@@ -266,6 +323,9 @@ int gfx_window_vk_extensions(const char **out, int max) {
 }
 
 int gfx_window_vk_presentable(VkInstance inst, VkPhysicalDevice pd, uint32_t family) {
+#ifdef RT_VOLK
+    if (driver_load()) return 1;   // Android's and headless surfaces present from any graphics queue
+#endif
     return video_up() && SDL_Vulkan_GetPresentationSupport(inst, pd, family);
 }
 
@@ -302,6 +362,26 @@ typedef struct { VkInstance inst; VkSurfaceKHR surface; } SurfaceReq;
 
 static void make_surface(void *arg) {
     SurfaceReq *r = arg;
+#ifdef RT_VOLK
+    if (driver_load()) {   // the driver's own surface: SDL's would come from the system's loader
+        VkResult res = VK_ERROR_INITIALIZATION_FAILED;
+#ifdef __ANDROID__
+        void *nw = SDL_GetPointerProperty(SDL_GetWindowProperties(g_win), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+        PFN_vkCreateAndroidSurfaceKHR make = (PFN_vkCreateAndroidSurfaceKHR)vkGetInstanceProcAddr(r->inst, "vkCreateAndroidSurfaceKHR");
+        VkAndroidSurfaceCreateInfoKHR ci = {.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR, .window = nw};
+        if (nw && make) res = make(r->inst, &ci, NULL, &r->surface);
+#else
+        PFN_vkCreateHeadlessSurfaceEXT make = (PFN_vkCreateHeadlessSurfaceEXT)vkGetInstanceProcAddr(r->inst, "vkCreateHeadlessSurfaceEXT");
+        VkHeadlessSurfaceCreateInfoEXT ci = {.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        if (make) res = make(r->inst, &ci, NULL, &r->surface);
+#endif
+        if (res != VK_SUCCESS) {
+            rt_log("gfx: the driver made no surface (%d)", (int)res);
+            r->surface = VK_NULL_HANDLE;
+        }
+        return;
+    }
+#endif
     if (!SDL_Vulkan_CreateSurface(g_win, r->inst, NULL, &r->surface)) {
         rt_log("gfx: SDL_Vulkan_CreateSurface failed (%s)", SDL_GetError());
         r->surface = VK_NULL_HANDLE;

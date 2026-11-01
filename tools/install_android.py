@@ -7,7 +7,10 @@ the RomFS overlays of the build folder and the translator's identity (runtime/an
 device already matches is skipped, so a second run only pushes what changed (the 17 GB romfs.bin once). The data is
 your own game's: keep it on your devices.
 
-  python tools/install_android.py [--version v0] [--serial SERIAL] [--no-apk] [--no-data]
+--gpu-driver FILE puts a Vulkan driver library (a Mesa Turnip build for Adreno GPUs) into gpu_driver/ of the data
+folder, which the app then loads instead of the system's driver (runtime/android.c); --gpu-driver system removes it.
+
+  python tools/install_android.py [--version v0] [--serial SERIAL] [--no-apk] [--no-data] [--gpu-driver FILE|system]
 """
 
 import argparse
@@ -67,6 +70,7 @@ def main():
     ap.add_argument('--serial', help='adb device serial (default: the only device)')
     ap.add_argument('--no-apk', action='store_true', help='push the data only')
     ap.add_argument('--no-data', action='store_true', help='install the APK only')
+    ap.add_argument('--gpu-driver', help='a Vulkan driver .so for gpu_driver/, or "system" to remove the one there')
     args = ap.parse_args()
     if not shutil.which('adb'):
         sys.exit('adb not found: install the Android platform tools')
@@ -78,6 +82,13 @@ def main():
             sys.exit(f'{apk} not found: run tools/build_apk.py')
         print(f'installing {apk}', flush=True)
         adb(args.serial, 'install', '-r', apk)
+    if args.gpu_driver:
+        adb(args.serial, 'shell', f'rm -rf {shlex.quote(HOME + "/gpu_driver")}')
+        if args.gpu_driver != 'system':
+            drv = Path(args.gpu_driver)
+            if drv.suffix != '.so' or not drv.is_file():
+                sys.exit(f'{drv}: not a .so file')
+            push(args.serial, drv, f'{HOME}/gpu_driver/{drv.name}')
     if args.no_data:
         return
     print(f'data -> {HOME}', flush=True)

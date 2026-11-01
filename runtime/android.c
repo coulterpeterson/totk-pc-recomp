@@ -13,10 +13,15 @@
 //   as libtotk_xlate.so beside libtotk.so (tools/build_apk.py) and TOTK_XLATE names it; its identity
 //   (tools/build_xlate.py totk_xlate.id, which tools/install_android.py puts into TOTK_HOME) becomes TOTK_XLATE_ID, so
 //   shader caches translated elsewhere by the same sources keep their keys (gfx_shader.c xlate_identity).
+// - A GPU driver of the player's: one Vulkan driver library in gpu_driver/ of the data folder (a Mesa Turnip build for
+//   Adreno GPUs) is copied to the app's private storage, where a library may be loaded (shared storage may not be
+//   mapped executable), and TOTK_VK_DRIVER names the copy (gfx_window_sdl.c driver_load). Removing the folder goes
+//   back to the system's driver.
 #ifdef __ANDROID__
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <android/log.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -102,6 +107,47 @@ static void find_translator(const char *home) {
     if (id[0]) setenv("TOTK_XLATE_ID", id, 0);
 }
 
+static int copy_file(const char *from, const char *to) {
+    int in = open(from, O_RDONLY), out = in < 0 ? -1 : open(to, O_WRONLY | O_CREAT | O_TRUNC, 0700);
+    char buf[1 << 16];
+    ssize_t n = 0;
+    while (out >= 0 && (n = read(in, buf, sizeof buf)) > 0)
+        if (write(out, buf, (size_t)n) != n) n = -1;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    return in >= 0 && out >= 0 && n == 0;
+}
+
+static void find_gpu_driver(const char *home) {
+    char dir[1024], name[256] = "";
+    snprintf(dir, sizeof dir, "%s/gpu_driver", home);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    int found = 0;
+    for (struct dirent *e; (e = readdir(d));) {
+        size_t n = strlen(e->d_name);
+        if (n > 3 && !strcmp(e->d_name + n - 3, ".so") && n < sizeof name) found++, strcpy(name, e->d_name);
+    }
+    closedir(d);
+    if (found != 1) {
+        if (found) __android_log_print(ANDROID_LOG_WARN, "totk", "%s holds %d .so files: no GPU driver taken", dir, found);
+        return;
+    }
+    const char *priv = SDL_GetAndroidInternalStoragePath();
+    char src[1400], dst[1400];
+    struct stat a, b;
+    snprintf(src, sizeof src, "%s/%s", dir, name);
+    snprintf(dst, sizeof dst, "%s/gpu_driver", priv ? priv : "");
+    mkdir(dst, 0700);
+    snprintf(dst, sizeof dst, "%s/gpu_driver/%s", priv ? priv : "", name);
+    if (!priv || stat(src, &a) || ((stat(dst, &b) || b.st_size != a.st_size || b.st_mtime < a.st_mtime) && !copy_file(src, dst))) {
+        __android_log_print(ANDROID_LOG_ERROR, "totk", "GPU driver %s could not be copied to %s", src, dst);
+        return;
+    }
+    setenv("TOTK_VK_DRIVER", dst, 0);
+    __android_log_print(ANDROID_LOG_INFO, "totk", "GPU driver %s (copied from %s)", dst, src);
+}
+
 int SDL_main(int argc, char **argv) {
     log_to_logcat();
     const char *home = SDL_GetAndroidExternalStoragePath();
@@ -116,6 +162,7 @@ int SDL_main(int argc, char **argv) {
     setenv("TOTK_HOME", home, 1);
     if (chdir(home)) __android_log_print(ANDROID_LOG_WARN, "totk", "chdir %s: %s", home, strerror(errno));
     find_translator(home);
+    find_gpu_driver(home);
     __android_log_print(ANDROID_LOG_INFO, "totk", "home %s, %d arguments", home, argc - 1);
     int code = totk_main(argc, argv);
     android_log_drain();
