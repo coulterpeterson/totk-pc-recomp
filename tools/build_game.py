@@ -826,6 +826,13 @@ def main():
             sys.exit(f'no expected hashes known for {args.version}; pass --expected')
         expected = ROOT / 'tools' / 'data' / f'expected-v{DISPLAY_VERSIONS[args.version]}.json'
     hashes = json.loads(Path(expected).read_text())['exefs_sha256']
+    # A dump a repacking tool re-signed has another main.npdm (tools/extract.py report_npdm accepts it: only the code
+    # modules must match). The loader checks every ExeFS file it reads against these hashes, so the build takes that
+    # dump's own; boot.c check_npdm still checks the main thread values the kernel builds.
+    npdm = paths['exefs'] / 'main.npdm'
+    if npdm.is_file() and 'main.npdm' in hashes and file_sha256(npdm) != hashes['main.npdm']:
+        hashes = dict(hashes, **{'main.npdm': file_sha256(npdm)})
+        print(f'build_game: {flag_path(npdm)} differs from the reference dump; using its own hash')
     global CLANG, AR, WINDRES, NINJA, TOOLCHAIN_BIN, DEPS, EXE
     if args.ninja:
         NINJA = args.ninja.resolve()
