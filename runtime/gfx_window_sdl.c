@@ -191,6 +191,26 @@ static void handle(const SDL_Event *e) {
     }
 }
 
+#ifdef __ANDROID__
+// Android takes the app's window away when it goes to the background and gives a new one on return, and the Vulkan
+// surface dies with the old one. SDL reports the change from the Java thread, before the window goes, so the watch
+// tears the swapchain and the surface down at once (gfx_window_release_vk waits for the GPU) and wsys_minimized holds
+// the presents back; on return the next present makes them again on the new window (gfx_window_start).
+static volatile int32_t g_background;
+
+static bool lifecycle_watch(void *data, SDL_Event *e) {
+    (void)data;
+    if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND && !plat_xchg32(&g_background, 1)) {
+        rt_log("gfx: the app goes to the background: swapchain and surface released");
+        gfx_window_release_vk();
+    } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND && plat_xchg32(&g_background, 0)) {
+        rt_log("gfx: the app is back: a new surface at the next present");
+        gfx_window_mark_dirty();
+    }
+    return true;
+}
+#endif
+
 static void window_main(void *arg) {
     (void)arg;
     g_window_tid = plat_thread_id();
@@ -205,6 +225,9 @@ static void window_main(void *arg) {
         g_video_ok = 0;
     } else {
         g_ev_base = SDL_RegisterEvents(EV_COUNT);
+#ifdef __ANDROID__
+        SDL_AddEventWatch(lifecycle_watch, NULL);
+#endif
         rt_log("gfx: SDL %d.%d.%d, video driver %s", SDL_VERSIONNUM_MAJOR(SDL_GetVersion()),
                SDL_VERSIONNUM_MINOR(SDL_GetVersion()), SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
     }
@@ -296,7 +319,12 @@ void wsys_client_size(int *w, int *h) {
     if (g_win) SDL_GetWindowSizeInPixels(g_win, w, h);
 }
 
-int wsys_minimized(void) { return g_win && (SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)); }
+int wsys_minimized(void) {
+#ifdef __ANDROID__
+    if (plat_cas32(&g_background, 0, 0)) return 1;
+#endif
+    return g_win && (SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN));
+}
 
 static void resize_window(void *arg) {
     const int *wh = arg;
