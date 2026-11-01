@@ -3,8 +3,9 @@
 # upstream b75be8c, whose 1.2.1 column maps 1.0.0 addresses, and instruction-window matching around them; every
 # original word was checked against this build's main. 1.0.0 shares sdk and subsdk0 with 1.2.1. Left out, as their
 # words differ in 1.0.0: the equipment-switch cooldown fix of set realtime (issue #18), hair and cloth, bounce,
-# aspect and shadow. fps60 and realtime are off by default here: without the cooldown fix the game keeps its own
-# whole-vsync 30 fps steps unless TOTK_FPS60 and TOTK_REALTIME ask for more.
+# aspect and shadow. Without the cooldown fix the real-time step can leave the equipment switch blocked, so the
+# Android device profile (runtime/cfg.c ANDROID) keeps the game's own whole-vsync 30 fps steps; cfg.c's defaults,
+# not the set lines below, decide fps60 and realtime.
 
 set fps60    TOTK_FPS60          0
 set realtime TOTK_REALTIME       0

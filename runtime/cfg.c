@@ -121,7 +121,7 @@ static const CfgMeta metas[] = {
     // HDR output (vk_hdr.c): on at start (the tonemap shader is swapped as shaders load); the nits apply at once
     {"HDR", "0", "0|1", RESTART}, {"HDR_PEAK_NITS", "1000", "400..10000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
     {"HDR_UI_NITS", "203", "80..500", LIVE},
-    {"DEVICE_PROFILE", "auto", "auto|desktop|deck", RESTART},
+    {"DEVICE_PROFILE", "auto", "auto|desktop|deck|android", RESTART},
     {"SHADOW_RES", "game", "game|512|768|1024|1536|2048", RESTART},
     {"SHADOW_SCALE", "1", "1..4", RESTART},
     {"SHADOW_RANGE", "100", "50..400", RESTART}, {"CONTACT_SHADOWS", "0", "0..100", RESTART},
@@ -258,18 +258,30 @@ int cfg_load(const char *path) {
 
 // ---- device profiles: defaults for a known machine, below the environment and totk.ini and above the table, so any
 // key the player sets wins and resetting a key in the menu returns to the profile's value. TOTK_DEVICE_PROFILE = auto
-// (default: the Steam Deck when the firmware says so), desktop (none) or deck.
+// (default: the Steam Deck when the firmware says so, android in the Android build), desktop (none), deck or android.
 //
 // The Steam Deck (LCD Jupiter, OLED Galileo; 1280x800, 16:10, 4 Zen 2 cores, RDNA 2 with 8 CUs sharing 16 GB): the game
 // at the screen's 1280x800 with its own 5/6 scene (the aspect patch gives the camera its 16:10, resolution.c, and the
 // romfs-patches-1280x800 overlay the HUD's);
 // fullscreen and vsync, as gamescope composes Game Mode; 40 fps, which divides 40 Hz (and 120 Hz on the OLED).
 // Starting points to replace with measured ones (docs/tester-guide.md, Steam Deck).
-static const struct { const char *key, *value; } DECK[] = {
+typedef struct { const char *key, *value; } ProfileKey;
+static const ProfileKey DECK[] = {
     {"FULLSCREEN", "1"}, {"WINDOW_SIZE", "1280x800"}, {"OUTPUT_RES", "1280x800"}, {"RENDER_SCALE", "game"},
     {"VK_PRESENT", "fifo"}, {"FPS_LIMIT", "40"},
 };
-static int profile = -1;   // 0 none, 1 Steam Deck
+// Android handhelds (the AYN Thor and its peers: a phone SoC, its GPU sharing the RAM): the game in handheld mode,
+// which renders at the Switch's handheld resolution and asks the GPU for far less than docked, scaled to the screen by
+// the present; 30 fps with the game's own whole-vsync steps, as the Switch runs it (the real-time step also needs the
+// equipment cooldown fix, which 1.0.0's patch table lacks); fifo, the present mode every Android driver has.
+static const ProfileKey ANDROID[] = {
+    {"FULLSCREEN", "1"}, {"OPERATION_MODE", "handheld"}, {"FPS_LIMIT", "30"}, {"REALTIME", "0"},
+    {"VK_PRESENT", "fifo"},
+};
+static const struct { const char *name; const ProfileKey *keys; size_t count; } PROFILES[] = {
+    {"desktop", NULL, 0}, {"deck", DECK, sizeof DECK / sizeof *DECK}, {"android", ANDROID, sizeof ANDROID / sizeof *ANDROID},
+};
+static int profile = -1;   // index into PROFILES: 0 none, 1 Steam Deck, 2 Android
 
 static int read_line(const char *path, char *out, size_t n) {
     FILE *f = fopen(path, "r");
@@ -297,13 +309,18 @@ static int profile_of(void) {
     if (p >= 0) return p;
     const char *set = raw_get(PREFIX "DEVICE_PROFILE");
     if (set && !strcmp(set, "deck")) p = 1;
+    else if (set && !strcmp(set, "android")) p = 2;
     else if (set && *set && strcmp(set, "auto")) p = 0;
+#ifdef __ANDROID__
+    else p = 2;
+#else
     else p = on_steam_deck();
+#endif
     __atomic_store_n(&profile, p, __ATOMIC_RELEASE);
     return p;
 }
 
-const char *cfg_device_profile(void) { return profile_of() ? "deck" : "desktop"; }
+const char *cfg_device_profile(void) { return PROFILES[profile_of()].name; }
 
 static const char *raw_get(const char *name) {
     const char *e = getenv(name);
@@ -316,9 +333,10 @@ static const char *raw_get(const char *name) {
 
 const char *cfg_get(const char *name) {
     const char *v = raw_get(name);
-    if (v || strncmp(name, PREFIX, PREFIX_LEN) || !profile_of()) return v;
-    for (size_t i = 0; i < sizeof DECK / sizeof *DECK; i++)
-        if (!strcasecmp(DECK[i].key, name + PREFIX_LEN)) return DECK[i].value;
+    if (v || strncmp(name, PREFIX, PREFIX_LEN)) return v;
+    const ProfileKey *keys = PROFILES[profile_of()].keys;
+    for (size_t i = 0; i < PROFILES[profile_of()].count; i++)
+        if (!strcasecmp(keys[i].key, name + PREFIX_LEN)) return keys[i].value;
     return NULL;
 }
 
@@ -692,6 +710,6 @@ static void load_ini(void) {
 void cfg_init(void) {
     load_ini();
     if (profile_of())
-        rt_log("cfg: device profile Steam Deck: defaults for the keys totk.ini does not set (TOTK_DEVICE_PROFILE=desktop "
-               "turns it off)");
+        rt_log("cfg: device profile %s: defaults for the keys totk.ini does not set (TOTK_DEVICE_PROFILE=desktop "
+               "turns it off)", PROFILES[profile_of()].name);
 }
