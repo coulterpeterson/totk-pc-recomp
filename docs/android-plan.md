@@ -16,7 +16,14 @@ Done, and how it was checked:
 - arm64 Android 16 emulator, inside the app: `--selftest`, `--probe-mem`, `--probe-kernel` pass; the game runs 90 s
   headless (3526 frames, 56 threads, the save written).
 
+- Graphics on ARM: the title screen renders on arm64 Linux with Mesa's lavapipe, also called directly as a driver
+  library (`TOTK_VK_DRIVER`, the route a Turnip build takes on Android through `gpu_driver/`). On the Android 16
+  emulator Vulkan comes up through volk and a library copied from `gpu_driver/` loads from private storage.
+
 Open, in order:
+0. On the Thor: install, run, read `adb logcat -s totk`; with the stock driver first, then with a Turnip build in
+   `gpu_driver/` (`tools/install_android.py --gpu-driver`). Whether a Turnip build's own dependencies load without
+   libadrenotools' linker namespace help is the open question there.
 1. GPU on the Thor: no Android GPU has run the Vulkan path yet (the emulator lacks push descriptors). Without BC
    formats the textures are now decoded on the CPU (`tex_bc.c`), at 4-8x their memory (several GB by the title
    screen), and the game's own BC4 encoder draws are left out; it is a last resort. Depth clip control stays required:
