@@ -84,9 +84,13 @@ void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0);
 #define ST64(a, v) (*(u64u *)(uintptr_t)(a) = (uint64_t)(v))
 
 // ---- exclusive monitor (emulated with compare-and-swap)
+// Guest load-acquires and store-releases are seq_cst here. AArch64 keeps an STLR followed by an LDAR or LDAXR in
+// order (RCsc); C11 acquire/release does not: the compiler may swap the pair, x86 compiles both to a plain mov that
+// the store buffer reorders, and an aarch64 host with RCpc compiles the acquire to LDAPR, which may pass the STLR.
+// seq_cst costs an xchg for the store on x86 and nothing on aarch64 (LDAR/STLR).
 #define EXCL(N, T)                                                                         \
     static inline uint64_t ldx##N(Cpu *c, uint64_t a) {                                    \
-        T v = __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_ACQUIRE);                        \
+        T v = __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_SEQ_CST);                        \
         c->excl_addr = a;                                                                  \
         c->excl_val = v;                                                                   \
         return v;                                                                          \
@@ -99,10 +103,10 @@ void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0);
                                             __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);           \
     }                                                                                      \
     static inline uint64_t lda##N(uint64_t a) {                                            \
-        return __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_ACQUIRE);                       \
+        return __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_SEQ_CST);                       \
     }                                                                                      \
     static inline void stl##N(uint64_t a, uint64_t v) {                                    \
-        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_RELEASE);                       \
+        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_SEQ_CST);                       \
     }
 EXCL(8, uint8_t)
 EXCL(16, uint16_t)
@@ -112,7 +116,7 @@ EXCL(64, uint64_t)
 // Exclusive pair of two X registers: one 16-byte-aligned 128-bit access (cmpxchg16b; x86-64-v2 has CX16).
 // A pair of two W registers is a 64-bit exclusive and uses ldx64/stx64.
 static inline __uint128_t ldxp128(Cpu *c, uint64_t a) {
-    __uint128_t v = __atomic_load_n((__uint128_t *)(uintptr_t)a, __ATOMIC_ACQUIRE);
+    __uint128_t v = __atomic_load_n((__uint128_t *)(uintptr_t)a, __ATOMIC_SEQ_CST);
     c->excl_addr = a;
     c->excl_val = (uint64_t)v;
     c->excl_val_hi = (uint64_t)(v >> 64);

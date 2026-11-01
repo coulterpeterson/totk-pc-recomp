@@ -460,7 +460,8 @@ class Lifter:
         nbits = 8 << size
         t = f'uint{nbits}_t'
         p, v = f'({t} *)(uintptr_t)({XS(rn)})', f'({t}){X(rs)}'
-        order = ('__ATOMIC_RELAXED', '__ATOMIC_RELEASE', '__ATOMIC_ACQUIRE', '__ATOMIC_ACQ_REL')[A << 1 | R]
+        # Acquire and release forms are seq_cst for the same reason as lda/stl in runtime/cpu.h: the guest's are RCsc.
+        order = '__ATOMIC_SEQ_CST' if A or R else '__ATOMIC_RELAXED'
         if o3:
             if opc:
                 raise Unsupported('ldapr')
