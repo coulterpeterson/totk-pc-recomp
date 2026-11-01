@@ -53,8 +53,8 @@ static int hexval(char c) { return c <= '9' ? c - '0' : (c | 32) - 'a' + 10; }
 // parent of totk.exe that has one with a jobs.json, the running game version's first, then the others' (any census
 // serves a probe). 1 with that folder in dir.
 int probe_census_dir(char *dir, size_t n) {
-    const char *const versions[3] = {RT_V110 ? "v110" : RT_V143 ? "v143" : "v121",
-                                     RT_V110 ? "v121" : RT_V143 ? "v121" : "v143",
+    const char *const versions[3] = {RT_V100 ? "v0" : RT_V110 ? "v110" : RT_V143 ? "v143" : "v121",
+                                     RT_V110 ? "v121" : RT_V143 ? "v121" : RT_V100 ? "v121" : "v143",
                                      RT_V110 ? "v143" : RT_V143 ? "v110" : "v110"};
     for (int v = 0; v < 3; v++) {
         char exe[PLAT_PATH_MAX * 2];

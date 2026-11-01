@@ -180,13 +180,14 @@ static uint64_t read_ptr(uint64_t a) {
     uint64_t p = 0;
     return read_guest(a, &p, 8) ? p : 0;
 }
-// 1.2.1: [main+0x4728538] (1.1.0: [main+0x4630a68], 1.4.3: [main+0x3add238]) +0x1e8 scene, its component 13 lists the
-// resident actors; the one named "Player" has its position at +0x2b4 (MacNativeGames world_survey.c, game_version.h
-// TOTK_GAME_V121/V143). The 1.1.0 slot was measured from its own dereference chain: 181 scene accesses in that build
+// 1.2.1: [main+0x4728538] (1.1.0: [main+0x4630a68], 1.4.3: [main+0x3add238], 1.0.0: [main+0x4663f08]) +0x1e8 scene,
+// its component 13 lists the resident actors; the one named "Player" has its position at +0x2b4 (MacNativeGames
+// world_survey.c, game_version.h TOTK_GAME_V121/V143; 1.0.0 keeps the name 8 bytes earlier, at +0x210, and the position
+// at +0x2ac). The 1.1.0 slot was measured from its own dereference chain: 181 scene accesses in that build
 // read it, and one of them reproduces this walk (the 14-component check, component 13, the 0x70 stride and the name
 // compare) instruction for instruction.
 static int player_pos(float xyz[3]) {
-    uint64_t module = read_ptr(MOD_MAIN_BASE + (RT_V143 ? 0x3add238 : RT_V110 ? 0x4630a68 : 0x4728538)),
+    uint64_t module = read_ptr(MOD_MAIN_BASE + (RT_V143 ? 0x3add238 : RT_V110 ? 0x4630a68 : RT_V100 ? 0x4663f08 : 0x4728538)),
              scene = module ? read_ptr(module + 0x1e8) : 0;
     int32_t count = 0;
     if (!scene || !read_guest(scene + 0x50, &count, 4) || count < 14 || count > 256) return 0;
@@ -195,10 +196,10 @@ static int player_pos(float xyz[3]) {
     uint64_t links = read_ptr(resident + 0x28);
     for (int i = 0; links && i < count; i++) {
         uint64_t data = read_ptr(links + (uint64_t)i * 0x70 + 8), actor = data ? read_ptr(data + 0x40) : 0;
-        uint64_t name = actor ? read_ptr(actor + 0x218) : 0;
+        uint64_t name = actor ? read_ptr(actor + (RT_V100 ? 0x210 : 0x218)) : 0;
         char text[7];
         if (name && read_guest(name, text, 7) && !memcmp(text, "Player", 7))
-            return read_guest(actor + 0x2b4, xyz, 12) && isfinite(xyz[0]) && isfinite(xyz[2]);
+            return read_guest(actor + (RT_V100 ? 0x2ac : 0x2b4), xyz, 12) && isfinite(xyz[0]) && isfinite(xyz[2]);
     }
     return 0;
 }
