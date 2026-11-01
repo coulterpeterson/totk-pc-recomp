@@ -719,6 +719,43 @@ def mib(n):
     return f'{n / (1 << 20):,.1f} MiB'
 
 
+ANDROID_API = 33   # Android 13: the first whose libvulkan.so exports the Vulkan 1.3 core functions the back end calls
+                   # (vkCmdBeginRendering and the extended dynamic state); the Thor and its peers ship with it
+ANDROID_DEPS = ROOT / 'toolchain' / 'android' / 'arm64-v8a'   # tools/build_android_deps.py
+
+
+def android_toolchain(ndk):
+    """Point the build at the NDK's clang and the libraries of tools/build_android_deps.py, and make the link a shared
+    library: SDLActivity loads libtotk.so and calls its SDL_main."""
+    global CLANG, AR, NINJA, DEPS, EXE, LINK_FLAGS, LINK_LIBS
+    from build_android_deps import default_ndk, find_ninja
+    ndk = (ndk or default_ndk())
+    if not ndk or not ndk.is_dir():
+        sys.exit('NDK not found: pass --ndk or set ANDROID_NDK_HOME')
+    bin_ = next((ndk / 'toolchains' / 'llvm' / 'prebuilt').glob('*')) / 'bin'
+    CLANG, AR = bin_ / 'clang', bin_ / 'llvm-ar'
+    if not NINJA.is_file():
+        NINJA = Path(find_ninja())
+    if not (ANDROID_DEPS / 'lib' / 'libSDL3.so').is_file():
+        sys.exit(f'{ANDROID_DEPS} has no libSDL3.so: run tools/build_android_deps.py')
+    DEPS, EXE = ANDROID_DEPS, 'libtotk.so'
+    target = f'--target=aarch64-linux-android{ANDROID_API}'
+    for flags in (GEN_FLAGS, RT_FLAGS):
+        flags[:] = [target, '-fPIC'] + ['-march=armv8.2-a+crc' if f.startswith('-march=x86-64') else f for f in flags
+                                        if not f.startswith('-DRT_CPU_LEVEL')]
+    # -Bsymbolic: the runtime's own symbols bind inside the library; RELR packs the hundreds of thousands of RELATIVE
+    # relocations of the lifted modules' function tables (the reason the Linux build links -no-pie).
+    # No --gc-sections: hostfn.c finds the host-function tables only through __start_totk_ovr and friends, which keep
+    # no section alive, so the tables would be dropped. --no-undefined: a shared library otherwise links with missing
+    # symbols and fails only when Android loads it.
+    LINK_FLAGS = [target, '-shared', '-fuse-ld=lld', '-Wl,-Bsymbolic', '-Wl,-z,noexecstack',
+                  '-Wl,--pack-dyn-relocs=relr', '-Wl,--no-undefined', '"-Wl,-Map=$builddir/totk.map"']
+    # The link runs through clang, not clang++, so the C++ runtime of the menu and VMA is named here: the NDK's static
+    # libc++, so the APK needs no libc++_shared.so beside it.
+    LINK_LIBS = ['-lSDL3', '-l:libopus.a', '-l:libvpx.a', '-l:libzstd.a', '-l:libc++_static.a', '-l:libc++abi.a',
+                 '-lvulkan', '-landroid', '-llog', '-lm', '-ldl']
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--version', default='v121', help='game version (default v121)')
@@ -748,9 +785,12 @@ def main():
     ap.add_argument('--toolchain', type=Path, help='llvm-mingw directory (with bin/clang.exe) to build with instead of '
                                                    'MSYS2 UCRT64 clang; on Linux an LLVM directory (bin/clang, '
                                                    'bin/llvm-ar) instead of the clang on PATH')
-    ap.add_argument('--target', choices=('x86_64', 'aarch64'), default='x86_64',
+    ap.add_argument('--target', choices=('x86_64', 'aarch64', 'android'), default='x86_64',
                     help='Linux: the CPU to build for (default x86_64). aarch64 compiles with -march=armv8.2-a+crc and '
-                         'writes build/<version>-aarch64 unless --out says otherwise')
+                         'writes build/<version>-aarch64 unless --out says otherwise. android cross-compiles the same '
+                         'with the NDK into build/<version>-android/libtotk.so for tools/build_apk.py')
+    ap.add_argument('--ndk', type=Path, help='android: the NDK directory (default: ANDROID_NDK_HOME, else the newest '
+                                             'NDK of the Android SDK)')
     ap.add_argument('--ninja', type=Path, help='ninja.exe to build with (default: MSYS2 UCRT64, else bin/ninja.exe of the '
                                                'release folder)')
     ap.add_argument('--sysroot', type=Path, help='Linux: the glibc headers and libraries to compile and link against '
@@ -768,7 +808,7 @@ def main():
 
     gen = (args.gen or ROOT / 'generated' / args.version).resolve()
     if args.target != 'x86_64' and WIN:
-        sys.exit('--target aarch64 builds for Linux only')
+        sys.exit(f'--target {args.target} builds on Linux or macOS only')
     out = (args.out or ROOT / 'build' / (args.version + ('' if args.target == 'x86_64' else '-' + args.target))).resolve()
     extracted = None if args.exefs and args.romfs else work_dir() / 'extracted' / args.version
     paths = {'exefs': (args.exefs or extracted / 'exefs').resolve(),
@@ -786,7 +826,7 @@ def main():
             sys.exit(f'no expected hashes known for {args.version}; pass --expected')
         expected = ROOT / 'tools' / 'data' / f'expected-v{DISPLAY_VERSIONS[args.version]}.json'
     hashes = json.loads(Path(expected).read_text())['exefs_sha256']
-    global CLANG, AR, WINDRES, NINJA, TOOLCHAIN_BIN, DEPS
+    global CLANG, AR, WINDRES, NINJA, TOOLCHAIN_BIN, DEPS, EXE
     if args.ninja:
         NINJA = args.ninja.resolve()
     elif not NINJA.is_file() and (ROOT / 'bin' / ('ninja' + ('.exe' if WIN else ''))).is_file():
@@ -806,7 +846,9 @@ def main():
         # the libSDL3.so.0 beside it
         for lib in ('opus', 'vpx', 'zstd'):
             LINK_LIBS[LINK_LIBS.index(f'-l{lib}')] = f'-l:lib{lib}.a'
-    if args.target == 'aarch64':
+    if args.target == 'android':
+        android_toolchain(args.ndk)
+    elif args.target == 'aarch64':
         # -ffixed-x18: kern_ap_stub (runtime/kernel.c) needs one register that interrupted generated code never holds
         # a value in; on bionic x18 is reserved already.
         for flags in (GEN_FLAGS, RT_FLAGS):

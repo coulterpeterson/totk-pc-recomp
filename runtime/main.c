@@ -492,6 +492,9 @@ static void portable_paths(RtConfig *c) {
     c->profile = portable_path(exe, "TOTK_PROFILE_DIR", "profile", NULL, pp_profile, sizeof pp_profile, c->profile);
 }
 
+#ifdef __ANDROID__
+#define main totk_main   // android.c's SDL_main, the app's entry point, runs it
+#endif
 int main(int argc, char **argv) {
     mem_init();   // first: claim the guest address space before anything else can land there; reads totk.ini
     // A restart from the settings menu (gfx_present.c gfx_window_closed) starts this process while the one it replaces

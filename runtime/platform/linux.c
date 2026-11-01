@@ -81,6 +81,7 @@ struct PlatThread {
     PlatThreadFn fn;
     void *arg;
     volatile int32_t tid;   // the kernel's id once the thread runs, for plat_thread_set_priority
+    int32_t done;           // fn returned (bionic has no pthread_timedjoin_np; plat_thread_join_ns polls this)
     char name[16];          // the kernel keeps 15 characters
 };
 
@@ -102,6 +103,7 @@ static void *thread_main(void *p) {
     __atomic_store_n(&t->tid, (int32_t)syscall(SYS_gettid), __ATOMIC_RELEASE);
     if (t->name[0]) pthread_setname_np(pthread_self(), t->name);
     t->fn(t->arg);
+    __atomic_store_n(&t->done, 1, __ATOMIC_RELEASE);
     return NULL;
 }
 
@@ -443,6 +445,17 @@ void plat_thread_join(PlatThread *t) {
 }
 
 int plat_thread_join_ns(PlatThread *t, uint64_t ns) {
+#ifdef __ANDROID__
+    // bionic has no pthread_timedjoin_np: wait in 1 ms steps for thread_main to mark the thread done, then join it.
+    for (uint64_t waited = 0; !__atomic_load_n(&t->done, __ATOMIC_ACQUIRE); waited += 1000000) {
+        if (waited >= ns) return 0;
+        struct timespec ms = {0, 1000000};
+        nanosleep(&ms, NULL);
+    }
+    pthread_join(t->t, NULL);
+    free(t);
+    return 1;
+#else
     struct timespec at;
     clock_gettime(CLOCK_REALTIME, &at);   // pthread_timedjoin_np takes a CLOCK_REALTIME deadline
     uint64_t end = (uint64_t)at.tv_sec * 1000000000u + (uint64_t)at.tv_nsec + ns;
@@ -450,6 +463,7 @@ int plat_thread_join_ns(PlatThread *t, uint64_t ns) {
     if (pthread_timedjoin_np(t->t, NULL, &at)) return 0;
     free(t);
     return 1;
+#endif
 }
 
 // The thread keeps using t->fn and t->arg, so the struct stays allocated (a few bytes per detached thread).
@@ -1372,6 +1386,12 @@ int plat_module_of(uintptr_t addr, char *name, size_t cap, uintptr_t *base) {
 }
 
 int plat_exe_path(char *out, size_t cap) {
+#ifdef __ANDROID__
+    // An app has no executable of its own (/proc/self/exe is app_process64): android.c sets TOTK_HOME, and the files
+    // the runtime keeps beside its executable live there. A build run from adb shell has a real one and no TOTK_HOME.
+    const char *home = getenv("TOTK_HOME");
+    if (home && *home) return snprintf(out, cap, "%s/totk", home) < (int)cap;
+#endif
     ssize_t n = readlink("/proc/self/exe", out, cap - 1);
     if (n <= 0 || (size_t)n >= cap - 1) return 0;
     out[n] = 0;
@@ -1932,7 +1952,11 @@ int plat_spawn(const char *const *argv, const char *cwd) {
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     spawn_close_from(&fa, 3);
+#if defined(__ANDROID__) && __ANDROID_API__ < 34
+    (void)cwd;   // bionic has the chdir action from Android 14 only; the only children (the translator) need none
+#else
     posix_spawn_file_actions_addchdir_np(&fa, cwd);
+#endif
     posix_spawnattr_t at;
     posix_spawnattr_init(&at);
     sigset_t none, all;
