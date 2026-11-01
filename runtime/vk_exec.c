@@ -262,6 +262,11 @@ static void bc_copy_back(VkExec *ex, const VkExecTarget *t) {
 // image's stand-in (bc_standin). 1 when o is filled (target or left out), 0 for any other target.
 static int bc_target(const tex_t *t, const view_t *v, int has_v, const VkTexImage *img, VkExecTarget *o) {
     int bw, bh;
+    if (img->bc_decoded) {   // a BC texture held decoded (no BC formats on the GPU) has no blocks for an encoder to fill
+        warn_once(W_BLOCK_VIEW, "render target format %#x (%ux%u): BC texture held decoded, its encoder draws left out",
+                  t->d.format, t->d.width, t->d.height);
+        return 1;
+    }
     if (img->type != VK_IMAGE_TYPE_3D || img->block_views || !nvn_fmt_bpb(t->d.format, &bw, &bh) || bw != 4 || bh != 4)
         return 0;
     VkFormat fmt;

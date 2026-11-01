@@ -252,6 +252,39 @@ static int test_astc(void) {
     return 0;
 }
 
+// ---- BC decoding (tex_bc.c, for GPUs without BC formats) ----
+// Blocks whose texels are known: solid BC1 blocks in a 6x5 image (cut last column and row), a 3-colour BC1 block
+// whose punch-through texel is transparent black (opaque black for BC1 RGB), BC4 index 0 and 1, BC5's two channels.
+static int test_bc(void) {
+    static const uint8_t bc1[4][8] = {{0xff, 0xff, 0, 0, 0, 0, 0, 0}, {0, 0, 0x00, 0xf8, 0x55, 0x55, 0x55, 0x55},
+                                      {0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, {0x1f, 0, 0, 0, 0, 0, 0, 0}};
+    uint8_t px[6 * 5 * 4];
+    bc_decode(1, 0, 0, &bc1[0][0], 6, 5, px);
+#define AT(x, y) (px + ((y) * 6 + (x)) * 4)
+    if (memcmp(AT(0, 0), "\xff\xff\xff\xff", 4) || memcmp(AT(5, 3), "\xff\x00\x00\xff", 4) ||
+        memcmp(AT(0, 4), "\x00\x00\x00\x00", 4) || memcmp(AT(5, 4), "\x00\x00\xff\xff", 4)) {
+        printf("probe-vkmem: FAIL bc1 texels\n");
+        return 1;
+    }
+    bc_decode(1, 0, 1, &bc1[0][0], 6, 5, px);
+    if (memcmp(AT(0, 4), "\x00\x00\x00\xff", 4)) { printf("probe-vkmem: FAIL bc1 rgb punch-through\n"); return 1; }
+#undef AT
+    static const uint8_t bc4[2][8] = {{200, 100, 0, 0, 0, 0, 0, 0}, {200, 100, 0x49, 0x92, 0x24, 0x49, 0x92, 0x24}};
+    static const uint8_t bc5[16] = {10, 5, 0, 0, 0, 0, 0, 0, 77, 33, 0, 0, 0, 0, 0, 0};
+    uint8_t r8[5], rg[4 * 4 * 2];
+    bc_decode(4, 0, 0, &bc4[0][0], 5, 1, r8);
+    bc_decode(5, 0, 0, bc5, 4, 4, rg);
+    if (r8[0] != 200 || r8[3] != 200 || r8[4] != 100 || rg[0] != 10 || rg[1] != 77 || rg[30] != 10 || rg[31] != 77) {
+        printf("probe-vkmem: FAIL bc4/bc5 texels\n");
+        return 1;
+    }
+    if (bc_texel_bytes(1) != 4 || bc_texel_bytes(4) != 1 || bc_texel_bytes(5) != 2 || bc_texel_bytes(6) != 8) {
+        printf("probe-vkmem: FAIL bc texel sizes\n");
+        return 1;
+    }
+    return 0;
+}
+
 // ---- formats ----
 static unsigned n_mapped, n_supported, n_unmapped, n_unsupported, n_fallback;
 
@@ -582,8 +615,8 @@ static int test_gpu(void) {
 }
 
 int probe_vkmem(void) {
-    if (test_deswizzle() || test_box() || test_astc() || test_formats()) return 1;
-    printf("probe-vkmem: cpu part passed (%u deswizzle cases, %u astc blocks, formats: %u mapped, %u supported by the GPU, "
+    if (test_deswizzle() || test_box() || test_astc() || test_bc() || test_formats()) return 1;
+    printf("probe-vkmem: cpu part passed (%u deswizzle cases, %u astc blocks, bc blocks ok, formats: %u mapped, %u supported by the GPU, "
            "%u unsupported by the GPU, %u unmapped, %u with a fallback)\n",
            g_cases, g_astc_blocks, n_mapped, n_supported, n_unsupported, n_unmapped, n_fallback);
     int bad = test_gpu();

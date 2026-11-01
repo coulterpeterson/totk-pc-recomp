@@ -42,6 +42,12 @@ bool astc_decode_block(const uint8_t block[16], uint32_t bw, uint32_t bh, bool s
 void astc_decode_ldr_mt(const uint8_t *blocks, uint32_t width, uint32_t height, uint32_t bw, uint32_t bh, bool srgb,
                         uint8_t *rgba_out);
 
+// ---- tex_bc.c: BC1-BC7 to uncompressed texels (bcdec) for GPUs without BC formats ----
+// kind 1..7 (6 BC6H); blocks: row-major blocks covering ceil(width/4) x ceil(height/4); out: width*height texels of
+// bc_texel_bytes(kind) bytes (RGBA8; BC4 R8; BC5 R8G8; BC6H RGBA16F with alpha 1). opaque: BC1 RGB, alpha forced to 1.
+int bc_texel_bytes(int kind);
+void bc_decode(int kind, int is_signed, int opaque, const uint8_t *blocks, uint32_t width, uint32_t height, uint8_t *out);
+
 // ---- vk_formats.c (LAS Recomp runtime/nvn/vulkan/textures.c format table, MIT) ----
 typedef struct TexVkFormat {
     VkFormat vk;                  // format of the image created on this GPU
@@ -55,6 +61,9 @@ typedef struct TexVkFormat {
                                   // zero for native ASTC (vk == ideal, raw blocks as for BC)
     uint8_t astc_srgb;
     uint8_t astc_bc;              // ASTC decoded and then encoded to BC3 (vk BC3, TOTK_ASTC_BC; vk_astc.c)
+    uint8_t bc;                   // nonzero: BC1..BC7 (6: BC6H) decoded into vk on the CPU (tex_bc.c), the device
+                                  // samples no BC formats (vk_bc_native); zero for native BC (raw blocks)
+    uint8_t bc_signed, bc_opaque; // BC4/BC5 SNORM, BC6H SFLOAT; BC1 RGB (alpha 1)
     uint8_t depth, stencil;       // aspect flags of depth / stencil formats
     const char *note;             // why a fallback or an expansion was chosen; NULL when the mapping is direct
     const char *reason;           // unmapped formats only: why there is no Vulkan format

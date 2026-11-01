@@ -330,15 +330,14 @@ static int create_device(void) {
     else if (!h->samplerAnisotropy) miss = "samplerAnisotropy";
     else if (!h->independentBlend) miss = "independentBlend";
     else if (!h->geometryShader) miss = "geometryShader";
-    else if (!h->textureCompressionBC || env_on("TOTK_FORCE_NO_BC")) miss = "textureCompressionBC";
     if (miss) {
         rt_log("vk: required feature missing on %s: %s", g_vk.props.deviceName, miss);
-        if (!strcmp(miss, "textureCompressionBC"))
-            rt_log("vk: the game's BC1-BC7 textures have no fallback yet: this GPU is unsupported until a BC transcoder "
-                   "exists (docs/android.md section 4, \"BC fallback design\"); TOTK_FORCE_NO_BC=1 forces this path");
         free(c);
         return 0;
     }
+    if (!h->textureCompressionBC || env_on("TOTK_FORCE_NO_BC"))
+        rt_log("vk: %s: no BC formats%s: the game's BC1-BC7 textures are decoded on the CPU at upload (tex_bc.c)",
+               g_vk.props.deviceName, h->textureCompressionBC ? " (TOTK_FORCE_NO_BC)" : "");
     if (!c->fault.deviceFault) g_vk.has_device_fault = 0;   // vkGetDeviceFaultInfoEXT needs the feature, not just the extension
     g_vk.has_buffer_device_address = c->f12.bufferDeviceAddress;
     g_vk.has_astc_ldr = h->textureCompressionASTC_LDR;
@@ -418,6 +417,17 @@ static void destroy_all(void) {
 }
 
 long vk_validation_errors_total(void) { return g_errors_total + (g_ready ? g_vk.validation_errors : 0); }
+
+// Whether images of BC format bc_fmt hold the raw blocks: without a device (the probes' format checks) they do;
+// TOTK_FORCE_NO_BC=1 or a device that cannot sample the format sends the texture through tex_bc.c instead.
+int vk_bc_native(VkFormat bc_fmt) {
+    if (!g_ready) return 1;
+    if (env_on("TOTK_FORCE_NO_BC")) return 0;
+    VkFormatProperties p;
+    vkGetPhysicalDeviceFormatProperties(g_vk.phys, bc_fmt, &p);
+    VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    return (p.optimalTilingFeatures & need) == need;
+}
 
 int vk_init(void) {
     plat_mutex_lock(&g_lock);

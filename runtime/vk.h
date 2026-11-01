@@ -12,7 +12,7 @@
 // Required (device choice fails without them): Vulkan 1.3; VK_KHR_swapchain, VK_KHR_push_descriptor,
 // VK_EXT_depth_clip_control, VK_EXT_external_memory_host; features timelineSemaphore, dynamicRendering,
 // synchronization2, shaderStorageImageWriteWithoutFormat, depthClipControl, shaderInt64, samplerAnisotropy,
-// independentBlend, geometryShader, textureCompressionBC.
+// independentBlend, geometryShader. Without textureCompressionBC the BC textures are decoded on the CPU (tex_bc.c).
 // Optional (flag set in VkCtx when enabled): the has_* members.
 typedef struct VkCtx {
     VkInstance instance;
@@ -278,6 +278,8 @@ void vk_defer_buffer(VkBuffer buf, VmaAllocation alloc);
 // ---- ASTC (vk_astc.c). TOTK_ASTC = auto | gpu | native | cpu | check; see vk_astc.c.
 enum { VK_ASTC_CPU, VK_ASTC_GPU, VK_ASTC_NATIVE, VK_ASTC_CHECK };
 int vk_astc_mode(void);                 // decided once per device (logged); VK_ASTC_CPU before vk_init
+int vk_bc_native(VkFormat bc_fmt);      // 1: images of this BC format are created as such (raw blocks); 0: decoded on
+                                        // the CPU (tex_bc.c; no device BC support, or TOTK_FORCE_NO_BC=1)
 int vk_astc_native(VkFormat astc_fmt);  // 1: images of this ASTC format are created as such and get the raw blocks
 int vk_astc_gpu(void);                  // 1: ASTC images decoded to RGBA8 by the compute decoder (vk_astc_record)
 int vk_astc_bc(void);                   // 1: those images are BC3 instead, encoded after the decode (TOTK_ASTC_BC=1)
@@ -323,6 +325,8 @@ typedef struct {
     uint8_t bound;                 // aliases physical-pool memory (physical and virtual pools)
     uint8_t block_views;           // BC image that renders through uncompressed views of its blocks (BLOCK_TEXEL_VIEW_
                                    // COMPATIBLE + EXTENDED_USAGE: only those views may use COLOR_ATTACHMENT)
+    uint8_t bc_decoded;            // BC texture held decoded (TexVkFormat.bc, tex_bc.c): it has no blocks to copy or
+                                   // draw into
     uint8_t swz[4];               // NVN texture swizzle selectors (nvnTextureBuilderSetSwizzle); a view swizzle replaces them
     uint8_t fb_usage;              // created with ATTACHMENT_FEEDBACK_LOOP usage (VK_FEEDBACK_LAYOUT, attachable images)
     uint8_t fb_learned;            // a draw sampled it while it was a written attachment of the open pass: its passes

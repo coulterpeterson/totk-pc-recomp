@@ -462,6 +462,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     p->mirrored = (uint8_t)tex_mirrored(t);
     p->bound = e->bound_to != NULL;
     p->block_views = (uint8_t)block_views;
+    p->bc_decoded = f.bc;
     p->fb_usage = (uint8_t)fb_usage;
     p->scale = (uint8_t)scale;
 
@@ -656,6 +657,19 @@ static void astc_check(const Tex *e, const uint8_t *raw, const VkAstcRegion *ar,
                (unsigned long long)n_texels, (unsigned long long)n_diff_tex);
 }
 
+// What decoding BC textures on the CPU costs (no BC formats on the GPU, tex_bc.c): blocks in, texels out, logged at
+// the first texture and every 256th.
+static void bc_count(uint64_t blocks, uint64_t texels, int new_texture) {
+    static uint64_t n_tex, in, out;
+    static PlatMutex lock = PLAT_MUTEX_INIT;
+    plat_mutex_lock(&lock);
+    n_tex += new_texture, in += blocks, out += texels;
+    if (new_texture && (n_tex == 1 || !(n_tex & 255)))
+        rt_log("vk: BC on the CPU: %llu textures, %.1f MiB of blocks decoded to %.1f MiB", (unsigned long long)n_tex,
+               in / 1048576.0, out / 1048576.0);
+    plat_mutex_unlock(&lock);
+}
+
 // Staging bytes of one part of a texture upload decoded or copied on the CPU (see upload). With TOTK_ASTC=cpu a
 // large ASTC array decodes to RGBA8 in one go: a staging buffer of 676682336 bytes failed (-2) on an Intel UHD with
 // 8 GB of shared memory and the game closed before the title screen.
@@ -671,7 +685,7 @@ static void upload(Tex *e) {
     uint64_t p0 = perf_begin(), u0 = kern_now_ns();
     int linear = nvn_tex_is_linear(d), is3d = d->target == NVN_TEXTURE_TARGET_3D, one_d = e->pub.type == VK_IMAGE_TYPE_1D;
     uint32_t levels = linear ? 1 : e->pub.levels, layers = linear ? 1 : e->pub.layers;
-    int astc = e->f.astc_bw != 0, rgb = e->f.expand_rgb;
+    int astc = e->f.astc_bw != 0, rgb = e->f.expand_rgb, bc = e->f.bc, bct = bc ? bc_texel_bytes(bc) : 0;
     int agpu = astc && vk_astc_gpu(), acheck = agpu && vk_astc_mode() == VK_ASTC_CHECK;   // raw blocks to the GPU
     uint32_t n = levels * layers, k = 0;
     VkBufferImageCopy *rg = calloc(n, sizeof *rg);
@@ -681,7 +695,8 @@ static void upload(Tex *e) {
         for (uint32_t ly = 0; ly < layers; ly++) {
             uint32_t w = mip(d->width, lv), h = one_d ? 1 : mip(d->height, lv), sl = is3d ? mip(d->depth, lv) : 1;
             uint64_t texels = (uint64_t)w * h * sl, raw = (uint64_t)(w + bw - 1) / bw * bpb * ((h + bh - 1) / bh) * sl;
-            uint64_t out = agpu ? raw : astc ? texels * 4 : rgb ? texels * (uint64_t)bpb / 3 * 4 : raw;
+            uint64_t out = agpu ? raw : astc ? texels * 4 : bc ? texels * (uint64_t)bct
+                         : rgb ? texels * (uint64_t)bpb / 3 * 4 : raw;
             rg[k++] = (VkBufferImageCopy){.bufferOffset = total, .imageSubresource = {e->pub.aspect, lv, ly, 1},
                                           .imageExtent = {w, h, sl}};
             total += (out + 15) & ~15ull;
@@ -708,7 +723,7 @@ static void upload(Tex *e) {
             uint32_t rb = (w + bw - 1) / bw * (uint32_t)bpb, rows = (h + bh - 1) / bh;
             size_t raw = (size_t)rb * rows * sl;
             rg[k].bufferOffset -= base;
-            uint8_t *dst = stg + rg[k].bufferOffset, *tmp = (astc && !agpu) || rgb ? malloc(raw) : NULL;
+            uint8_t *dst = stg + rg[k].bufferOffset, *tmp = (astc && !agpu) || rgb || bc ? malloc(raw) : NULL;
             if (nvn_deswizzle(d, lv, ly, t->mem, tmp ? tmp : dst, rb)) {
                 log_limited(&n_bad, "texture %#llx fmt %#x target %d: level %u layer %u has no CPU layout; uploaded as zeros",
                             (unsigned long long)e->pub.addr, d->format, d->target, lv, ly);
@@ -723,6 +738,12 @@ static void upload(Tex *e) {
                                        dst + (size_t)z * w * h * 4);
                 perf_end(PERF_ASTC, a0);
                 rg[k].bufferRowLength = w, rg[k].bufferImageHeight = h;
+            } else if (bc) {
+                for (uint32_t z = 0; z < sl; z++)
+                    bc_decode(bc, e->f.bc_signed, e->f.bc_opaque, tmp + (size_t)z * rb * rows, w, h,
+                              dst + (size_t)z * w * h * bct);
+                rg[k].bufferRowLength = w, rg[k].bufferImageHeight = h;
+                bc_count(raw, (uint64_t)w * h * sl * (uint64_t)bct, !k);
             } else if (rgb) {
                 expand_rgb(d->format, tmp, dst, (size_t)w * h * sl);
                 rg[k].bufferRowLength = w, rg[k].bufferImageHeight = h;
@@ -845,11 +866,12 @@ static void make_fresh_snap(Tex *e) {
 }
 
 // ---------------------------------------------------------------- aliases (TOTK_TEX_ALIAS)
-// Bytes per block and block size of the image's VkFormat (ASTC decodes to RGBA8, RGB expands to RGBA); 0 when the
-// VkFormat substitutes another one of unknown size.
+// Bytes per block and block size of the image's VkFormat (ASTC decodes to RGBA8, BC without device support to
+// tex_bc.c's texels, RGB expands to RGBA); 0 when the VkFormat substitutes another one of unknown size.
 static int img_block(const Tex *e, int *bw, int *bh) {
     if (e->f.astc_bc) { *bw = *bh = 4; return 16; }
     if (e->f.astc_bw) { *bw = *bh = 1; return 4; }
+    if (e->f.bc) { *bw = *bh = 1; return bc_texel_bytes(e->f.bc); }
     int b = nvn_fmt_bpb(e->t.d.format, bw, bh);
     if (e->f.expand_rgb) { *bw = *bh = 1; return b / 3 * 4; }
     return e->f.vk == e->f.ideal ? b : 0;
@@ -1280,9 +1302,9 @@ static int image_texels(Tex *e, const Region *g, const NVNcopyRegion *r, uint8_t
     static volatile int32_t n_astc, n_ds;
     VkCtx *c = vk_ctx();
     VkImageAspectFlags aspect;
-    if (e->f.astc_bw && !write) {
-        log_limited(&n_astc, "ReadTexels of ASTC texture %#llx: the image holds decoded RGBA8; zeros returned",
-                    (unsigned long long)e->pub.addr);
+    if ((e->f.astc_bw || e->f.bc) && !write) {
+        log_limited(&n_astc, "ReadTexels of %s texture %#llx: the image holds decoded texels; zeros returned",
+                    e->f.bc ? "BC" : "ASTC", (unsigned long long)e->pub.addr);
         return 0;
     }
     if (!read_aspect(e, &aspect)) {
@@ -1291,8 +1313,8 @@ static int image_texels(Tex *e, const Region *g, const NVNcopyRegion *r, uint8_t
     }
     if (g->level >= e->pub.levels) return 0;
     uint32_t w = (uint32_t)r->width, h = (uint32_t)r->height;
-    int rgb = e->f.expand_rgb, astc = e->f.astc_bw != 0, agpu = astc && write && vk_astc_gpu();
-    size_t texels = (size_t)w * h, ib = agpu ? 0 : astc ? 4 : rgb ? (size_t)g->bpb / 3 * 4 : 0;
+    int rgb = e->f.expand_rgb, astc = e->f.astc_bw != 0, agpu = astc && write && vk_astc_gpu(), bc = e->f.bc;
+    size_t texels = (size_t)w * h, ib = agpu ? 0 : astc ? 4 : bc ? (size_t)bc_texel_bytes(bc) : rgb ? (size_t)g->bpb / 3 * 4 : 0;
     size_t slice = ib ? texels * ib : g->wb * g->hb;   // agpu: the raw blocks, decoded by vk_astc_record
     VkBuffer sb;
     VmaAllocation sa;
@@ -1310,6 +1332,11 @@ static int image_texels(Tex *e, const Region *g, const NVNcopyRegion *r, uint8_t
                 uint64_t a0 = perf_begin();
                 astc_decode_ldr_mt(tight, w, h, e->f.astc_bw, e->f.astc_bh, e->f.astc_srgb, s);
                 perf_end(PERF_ASTC, a0);
+                free(tight);
+            } else if (bc) {
+                uint8_t *tight = malloc(g->wb * g->hb);
+                for (size_t y = 0; y < g->hb; y++) memcpy(tight + y * g->wb, m + y * g->row, g->wb);
+                bc_decode(bc, e->f.bc_signed, e->f.bc_opaque, tight, w, h, s);
                 free(tight);
             } else if (rgb) {
                 for (size_t y = 0; y < g->hb; y++) expand_rgb(e->t.d.format, m + y * g->row, s + y * w * ib, w);

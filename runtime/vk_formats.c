@@ -147,6 +147,22 @@ int tex_vk_format(int nvn_format, TexVkFormat *o) {
     o->alpha_one = (r->flags & F_X) != 0;
     o->note = r->note;
     memcpy(o->chan, r->chan, sizeof o->chan);
+    if (f >= 0x41 && f <= 0x50 && !vk_bc_native(o->ideal)) {
+        // No BC on this GPU (Qualcomm's Adreno driver): the blocks are decoded on the CPU at upload (tex_bc.c) into the
+        // uncompressed format of the same components and colour space.
+        static const uint8_t kind[16] = {1, 1, 2, 3, 1, 1, 2, 3, 4, 4, 5, 5, 7, 7, 6, 6};   // 0x41..0x50
+        unsigned i = f - 0x41;
+        int srgb = (f >= 0x45 && f <= 0x48) || f == 0x4E;
+        o->bc = kind[i];
+        o->bc_signed = f == 0x4A || f == 0x4C || f == 0x4F;
+        o->bc_opaque = f == 0x41 || f == 0x45;
+        o->vk = o->bc == 4 ? (o->bc_signed ? VK_FORMAT_R8_SNORM : VK_FORMAT_R8_UNORM)
+              : o->bc == 5 ? (o->bc_signed ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_UNORM)
+              : o->bc == 6 ? VK_FORMAT_R16G16B16A16_SFLOAT
+              : srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        o->note = "no BC formats on this GPU: decoded on the CPU at upload (tex_bc.c)";
+        return 1;
+    }
     if (r->alt && vk_ctx() && !tex_vk_format_supported(o)) {
         o->vk = r->alt;
         memcpy(o->chan, r->alt_chan, sizeof o->chan);
