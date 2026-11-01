@@ -2,9 +2,10 @@
 
 Installs build/<version>-android/totk.apk, then fills the app's data folder
 (/sdcard/Android/data/com.totkrecomp/files, android.c's TOTK_HOME) the way a portable PC folder is laid out
-(runtime/main.c portable_paths): exefs/ from the extracted ExeFS, romfs/romfs.bin, and beside them romfs-index.bin and
-the RomFS overlays of the build folder. A file whose size on the device already matches is skipped, so a second run
-only pushes what changed (the 17 GB romfs.bin once). The data is your own game's: keep it on your devices.
+(runtime/main.c portable_paths): exefs/ from the extracted ExeFS, romfs/romfs.bin, and beside them romfs-index.bin,
+the RomFS overlays of the build folder and the translator's identity (runtime/android.c). A file whose size on the
+device already matches is skipped, so a second run only pushes what changed (the 17 GB romfs.bin once). The data is
+your own game's: keep it on your devices.
 
   python tools/install_android.py [--version v0] [--serial SERIAL] [--no-apk] [--no-data]
 """
@@ -69,6 +70,7 @@ def main():
         push(args.serial, extracted / 'exefs' / name, f'{HOME}/exefs/{name}')
     push(args.serial, extracted / 'romfs' / 'romfs.bin', f'{HOME}/romfs/romfs.bin')
     push(args.serial, out / 'romfs-index.bin', f'{HOME}/romfs-index.bin')
+    push(args.serial, ROOT / 'build' / 'xlate-android' / 'totk_xlate.id', f'{HOME}/totk_xlate.id')
     for overlay in sorted(out.glob('romfs-patches*')):
         for f in sorted(p for p in overlay.rglob('*') if p.is_file()):
             push(args.serial, f, f'{HOME}/{f.relative_to(out).as_posix()}')

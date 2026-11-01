@@ -6,10 +6,15 @@
 //   romfs/romfs.bin and profile/ (main.c portable_paths).
 // - stdout and stderr, which go nowhere in an app, copied line by line to logcat under the tag "totk".
 // - The arguments: SDLActivity passes what the launch intent's "args" extra holds (MainActivity.getArguments).
+// - The shader translator: an app may run programs only from its native library folder, so the APK carries totk_xlate
+//   as libtotk_xlate.so beside libtotk.so (tools/build_apk.py) and TOTK_XLATE names it; its identity
+//   (tools/build_xlate.py totk_xlate.id, which tools/install_android.py puts into TOTK_HOME) becomes TOTK_XLATE_ID, so
+//   shader caches translated elsewhere by the same sources keep their keys (gfx_shader.c xlate_identity).
 #ifdef __ANDROID__
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <android/log.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -57,6 +62,27 @@ static void log_to_logcat(void) {
     if (!pthread_create(&t, NULL, log_pump, NULL)) pthread_detach(t);
 }
 
+static void find_translator(const char *home) {
+    Dl_info d;
+    char path[1024];
+    const char *slash;
+    if (dladdr((void *)find_translator, &d) && d.dli_fname && (slash = strrchr(d.dli_fname, '/')) &&
+        snprintf(path, sizeof path, "%.*s/libtotk_xlate.so", (int)(slash - d.dli_fname), d.dli_fname) < (int)sizeof path &&
+        !access(path, X_OK))
+        setenv("TOTK_XLATE", path, 0);
+    else
+        __android_log_print(ANDROID_LOG_WARN, "totk", "no runnable libtotk_xlate.so beside %s: shaders not in the cache "
+                            "are not translated", d.dli_fname ? d.dli_fname : "libtotk.so");
+    char id[128] = "";
+    snprintf(path, sizeof path, "%s/totk_xlate.id", home);
+    FILE *f = fopen(path, "r");
+    if (f) {
+        if (fgets(id, sizeof id, f)) id[strcspn(id, "\r\n")] = 0;
+        fclose(f);
+    }
+    if (id[0]) setenv("TOTK_XLATE_ID", id, 0);
+}
+
 int SDL_main(int argc, char **argv) {
     log_to_logcat();
     const char *home = SDL_GetAndroidExternalStoragePath();
@@ -67,6 +93,7 @@ int SDL_main(int argc, char **argv) {
     mkdir(home, 0770);
     setenv("TOTK_HOME", home, 1);
     if (chdir(home)) __android_log_print(ANDROID_LOG_WARN, "totk", "chdir %s: %s", home, strerror(errno));
+    find_translator(home);
     __android_log_print(ANDROID_LOG_INFO, "totk", "home %s, %d arguments", home, argc - 1);
     return totk_main(argc, argv);
 }

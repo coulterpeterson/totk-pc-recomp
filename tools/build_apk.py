@@ -1,8 +1,9 @@
 """Package build/<version>-android/libtotk.so as an APK: build/<version>-android/totk.apk.
 
 The APK is SDL's Java activity (SDL 3.4, from tools/build_android_deps.py's source tree), tools/android/'s manifest and
-MainActivity, libSDL3.so and libtotk.so. No Gradle: javac, the SDK's d8, aapt2, zipalign and apksigner do the steps.
-The libraries are stored uncompressed and page-aligned so Android maps them from the APK (extractNativeLibs="false").
+MainActivity, libSDL3.so, libtotk.so and the shader translator as libtotk_xlate.so (tools/build_xlate.py --android;
+an app runs programs only from its native library folder). No Gradle: javac, the SDK's d8, aapt2, zipalign and
+apksigner do the steps. The libraries are stored uncompressed and page-aligned.
 It is signed with the local debug key (~/.android/debug.keystore, made with keytool when missing).
 
 The APK holds code compiled from your game: install it on your own devices only, never share it. The game data stays
@@ -68,6 +69,9 @@ def main():
     sdl_so = DEPS / 'arm64-v8a' / 'lib' / 'libSDL3.so'
     if not sdl_java.is_dir() or not sdl_so.is_file():
         sys.exit('SDL for Android not found: run tools/build_android_deps.py')
+    xlate = ROOT / 'build' / 'xlate-android' / 'totk_xlate'
+    if not xlate.is_file():
+        sys.exit(f'{xlate} not found: run tools/build_xlate.py --android')
 
     sdk = sdk_dir()
     jar = sdk / 'platforms' / f'android-{COMPILE_SDK}' / 'android.jar'
@@ -95,8 +99,8 @@ def main():
             for item in base.infolist():
                 z.writestr(item, base.read(item.filename))
             z.write(tmp / 'classes.dex', 'classes.dex', zipfile.ZIP_DEFLATED)
-            for path in (sdl_so, so):
-                z.write(path, f'lib/arm64-v8a/{path.name}', zipfile.ZIP_STORED)
+            for path, name in ((sdl_so, sdl_so.name), (so, so.name), (xlate, 'libtotk_xlate.so')):
+                z.write(path, f'lib/arm64-v8a/{name}', zipfile.ZIP_STORED)
         aligned = tmp / 'aligned.apk'
         # -P 16: libraries on 16 KiB boundaries, which also covers 4 KiB-page kernels
         run([tools / 'zipalign', '-f', '-P', '16', '4', unaligned, aligned])

@@ -13,11 +13,18 @@ translator change re-keys the cache without a hand-made KEY_VERSION bump. --id-o
   python tools/build_xlate.py [--id-only] [--out DIR]
 
 --out builds into DIR instead of build/xlate (a task build dir: totk.exe takes the translator next to it).
+
+--android NDK builds the Android translator into build/xlate-android (unless --out says otherwise): NativeAOT for
+linux-bionic-arm64, linked by this host's clang against the NDK's sysroot and runtime libraries, which are the same
+files on every host. It runs on an arm64 Linux host (NativeAOT does not cross operating systems; an arm64 container on
+a Mac does), with NDK the toolchains/llvm/prebuilt/<host> directory of any NDK. tools/build_apk.py packs the result as
+libtotk_xlate.so.
 """
 
 import argparse
 import hashlib
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -139,10 +146,14 @@ def main() -> None:
     parser.add_argument("--llvm", type=Path, help="Linux: an LLVM directory whose bin/clang and lld link the exe")
     parser.add_argument("--sysroot", type=Path, help="Linux: link against this sysroot's glibc instead of the host's "
                                                      "(tools/make_release_linux.py)")
+    parser.add_argument("--android", type=Path, metavar="NDK",
+                        help="build for Android (linux-bionic-arm64) with this NDK prebuilt directory's sysroot")
     a = parser.parse_args()
+    global BUILD
     if a.out:
-        global BUILD
         BUILD = a.out.resolve()
+    elif a.android:
+        BUILD = ROOT / "build" / "xlate-android"
     if a.id_only:
         write_identity(BUILD / EXE)
         return
@@ -165,10 +176,24 @@ def main() -> None:
         shutil.copy2(XLATE / name, work / name)
     out = BUILD / "publish"
     shutil.rmtree(out, ignore_errors=True)
+    arm = platform.machine().lower() in ("arm64", "aarch64")
+    rid = "linux-bionic-arm64" if a.android else "win-x64" if WIN else "linux-arm64" if arm else "linux-x64"
     cmd = [
-        dotnet, "publish", str(work / "totk_xlate.csproj"), "-c", "Release", "-r", "win-x64" if WIN else "linux-x64",
+        dotnet, "publish", str(work / "totk_xlate.csproj"), "-c", "Release", "-r", rid,
         "-p:PublishAot=true", "-p:InvariantGlobalization=true", f"-p:RyuSrc={src}", "-o", str(out),
     ]
+    if a.android:
+        # NativeAOT's bionic target is unsupported by name only: the runtime pack carries it. The wrapper gives the host's
+        # clang the NDK's sysroot and its compiler-rt and libunwind (Android has no libgcc).
+        ndk = a.android.resolve()
+        version = sorted((ndk / "lib" / "clang").iterdir())[-1].name
+        cc = BUILD / "android-cc"
+        cc.write_text("#!/bin/sh\n"
+                      f"exec clang --target=aarch64-linux-android33 --sysroot={ndk / 'sysroot'} "
+                      f"-resource-dir={ndk / 'lib' / 'clang' / version} -rtlib=compiler-rt -unwindlib=libunwind \"$@\"\n")
+        cc.chmod(0o755)
+        cmd += ["-p:DisableUnsupportedError=true", "-p:PublishAotUsingRuntimePack=true",
+                f"-p:CppCompilerAndLinker={cc}", "-p:LinkerFlavor=lld", "-p:ObjCopyName=llvm-objcopy"]
     if a.llvm:
         env["PATH"] = str(a.llvm.resolve() / "bin") + os.pathsep + env["PATH"]
         cmd += ["-p:CppCompilerAndLinker=clang", "-p:LinkerFlavor=lld"]
