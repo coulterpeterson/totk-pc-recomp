@@ -88,7 +88,8 @@ def main():
         run([tools / 'd8', '--release', '--min-api', MIN_SDK, '--lib', jar, '--output', tmp,
              *sorted((tmp / 'classes').rglob('*.class'))])
         run([tools / 'aapt2', 'link', '-o', tmp / 'base.apk', '--manifest', ANDROID / 'AndroidManifest.xml', '-I', jar,
-             '--min-sdk-version', MIN_SDK, '--target-sdk-version', COMPILE_SDK])
+             '--min-sdk-version', MIN_SDK, '--target-sdk-version', COMPILE_SDK,
+             '--debug-mode'])   # debuggable: run-as reads the app's files, and a debugger attaches to a crash
         so = tmp / 'libtotk.so'
         if args.keep_debug:
             shutil.copy2(lib, so)

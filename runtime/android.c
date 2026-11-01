@@ -4,7 +4,9 @@
 //   its files beside its executable (totk.ini, romfs-index.bin, shader caches, logs; plat_exe_path), and an app has
 //   none, so platform/linux.c reports <TOTK_HOME>/totk as its executable. The game data goes there too: exefs/,
 //   romfs/romfs.bin and profile/ (main.c portable_paths).
-// - stdout and stderr, which go nowhere in an app, copied line by line to logcat under the tag "totk".
+// - stdout and stderr, which go nowhere in an app, copied line by line to logcat under the tag "totk". The copy runs
+//   on a thread of its own, so plat_exit drains it (android_log_drain) before the process ends: a fatal error's last
+//   lines are the ones that matter.
 // - The arguments: SDLActivity passes what the launch intent's "args" extra holds (MainActivity.getArguments).
 // - The shader translator: an app may run programs only from its native library folder, so the APK carries totk_xlate
 //   as libtotk_xlate.so beside libtotk.so (tools/build_apk.py) and TOTK_XLATE names it; its identity
@@ -16,6 +18,7 @@
 #include <android/log.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +28,8 @@
 
 int totk_main(int argc, char **argv);
 
-static int log_pipe[2];
+static int log_pipe[2] = {-1, -1};
+static pthread_t log_thread;
 
 static void *log_pump(void *arg) {
     (void)arg;
@@ -58,8 +62,22 @@ static void log_to_logcat(void) {
     if (pipe(log_pipe)) return;
     dup2(log_pipe[1], STDOUT_FILENO);
     dup2(log_pipe[1], STDERR_FILENO);
-    pthread_t t;
-    if (!pthread_create(&t, NULL, log_pump, NULL)) pthread_detach(t);
+    if (pthread_create(&log_thread, NULL, log_pump, NULL)) log_pipe[0] = -1;
+}
+
+// Called by plat_exit before _exit, and when SDL_main returns: once stdout, stderr and the pipe's own write end are
+// closed, the pump reads what is left, sees the end of the pipe and returns.
+void android_log_drain(void) {
+    static int drained;
+    if (log_pipe[0] < 0 || __atomic_exchange_n(&drained, 1, __ATOMIC_ACQ_REL)) return;
+    fflush(stdout);
+    fflush(stderr);
+    int null = open("/dev/null", O_WRONLY);
+    dup2(null, STDOUT_FILENO);
+    dup2(null, STDERR_FILENO);
+    close(null);
+    close(log_pipe[1]);
+    pthread_join(log_thread, NULL);
 }
 
 static void find_translator(const char *home) {
@@ -95,6 +113,8 @@ int SDL_main(int argc, char **argv) {
     if (chdir(home)) __android_log_print(ANDROID_LOG_WARN, "totk", "chdir %s: %s", home, strerror(errno));
     find_translator(home);
     __android_log_print(ANDROID_LOG_INFO, "totk", "home %s, %d arguments", home, argc - 1);
-    return totk_main(argc, argv);
+    int code = totk_main(argc, argv);
+    android_log_drain();
+    return code;
 }
 #endif

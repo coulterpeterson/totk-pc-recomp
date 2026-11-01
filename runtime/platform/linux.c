@@ -1490,9 +1490,16 @@ int plat_stderr_path(char *out, size_t cap) {
 
 // ---- process
 
+#ifdef __ANDROID__
+void android_log_drain(void);   // android.c: stdout and stderr reach logcat through a thread
+#endif
+
 void plat_exit(int code) {
     fflush(stdout);
     fflush(stderr);
+#ifdef __ANDROID__
+    android_log_drain();
+#endif
     _exit(code);
 }
 

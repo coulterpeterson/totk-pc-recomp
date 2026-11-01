@@ -1,7 +1,7 @@
 """Install the Android build on a device over adb and give it the game data.
 
 Installs build/<version>-android/totk.apk, then fills the app's data folder
-(/sdcard/Android/data/com.totkrecomp/files, android.c's TOTK_HOME) the way a portable PC folder is laid out
+(/storage/emulated/0/Android/data/com.totkrecomp/files, android.c's TOTK_HOME) the way a portable PC folder is laid out
 (runtime/main.c portable_paths): exefs/ from the extracted ExeFS, romfs/romfs.bin, and beside them romfs-index.bin,
 the RomFS overlays of the build folder and the translator's identity (runtime/android.c). A file whose size on the
 device already matches is skipped, so a second run only pushes what changed (the 17 GB romfs.bin once). The data is
@@ -21,7 +21,7 @@ from build_game import work_dir
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = 'com.totkrecomp'
-HOME = f'/sdcard/Android/data/{PACKAGE}/files'
+HOME = f'/storage/emulated/0/Android/data/{PACKAGE}/files'
 
 
 def adb(serial, *args, capture=False):
@@ -36,11 +36,26 @@ def remote_size(serial, path):
     return int(out) if out.lstrip('-').isdigit() else -1
 
 
+made = set()
+
+
+def make_dir(serial, path):
+    """path and the folders between it and the data folder, open to the app: a folder adb's shell makes is the
+    shell's, with group access only, and the app is not in that group (run-as cannot enter the data folder to make it
+    as the app)."""
+    if path in made:
+        return
+    parts = path[len(HOME) + 1:].split('/') if path.startswith(HOME + '/') else []
+    dirs = [HOME + '/' + '/'.join(parts[:i + 1]) for i in range(len(parts))]
+    adb(serial, 'shell', ' && '.join(f'mkdir -p {shlex.quote(d)} && chmod 2777 {shlex.quote(d)}' for d in dirs) or 'true')
+    made.update(dirs)
+
+
 def push(serial, src, dst):
     if remote_size(serial, dst) == src.stat().st_size:
         print(f'  up to date: {dst}')
         return
-    adb(serial, 'shell', 'mkdir', '-p', shlex.quote(dst.rsplit('/', 1)[0]))
+    make_dir(serial, dst.rsplit('/', 1)[0])
     print(f'  {src.name} ({src.stat().st_size / (1 << 20):,.1f} MiB) -> {dst}', flush=True)
     adb(serial, 'push', src, dst)
 
