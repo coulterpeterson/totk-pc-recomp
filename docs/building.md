@@ -187,6 +187,71 @@ well: the shadow copies are chosen for the measured cost above, not for a missin
 The Deck's GPU (Van Gogh) has no native ASTC, so its textures go through the compute decoder (`runtime/vk_astc.c`,
 `TOTK_ASTC`) as on desktop AMD GPUs without it; frame times measured there include it.
 
+## Android (in progress)
+
+The game builds into an APK for arm64 Android 13 or later on a PC or Mac, from the 1.0.0 base game, 1.2.1 or 1.4.3.
+Nothing is compiled on the device. The APK holds code compiled from your game: install it on your own devices only.
+Plan and status: [android-plan.md](android-plan.md); analysis: [android.md](android.md).
+
+Status: the game runs headless (`gpu = null` in `totk.ini`) inside the app on an arm64 Android 16 emulator, 90 s
+into the world with its save written, and `--selftest`, `--probe-mem` and `--probe-kernel` pass there. The Vulkan
+path has run on no Android GPU yet: the emulator's SwiftShader lacks `VK_KHR_push_descriptor`. Qualcomm's own driver
+probably lacks BC textures, which the back end requires (`vk: required feature missing ... textureCompressionBC`);
+loading Mesa Turnip or patching the driver through libadrenotools is the planned answer.
+
+Requirements on the build machine (verified on an Apple M4 Mac):
+
+- Android SDK with platform 35 and build-tools, NDK r30 (`sdkmanager "ndk;30.0.16248370"`), a JDK, `adb`.
+- Docker with arm64 Linux containers, for the shader translator (`tools/android/xlate.Dockerfile`).
+- The Python environments, `config.local.toml` and `tools/extract.py` as above. `tools/build_hactool.py` builds hactool
+  on macOS too.
+
+Steps, with `v0` (1.0.0) as the example version:
+
+1. Libraries for Android (SDL 3.4.18, Opus, libvpx, zstd, Vulkan headers, VMA) into `toolchain/android/arm64-v8a`:
+
+   ```sh
+   .venv/bin/python tools/build_android_deps.py
+   ```
+
+2. Lift with the Android address layout (modules at 0x2000000000, below the 39-bit address space's busy top), and
+   compile and link `build/v0-android/libtotk.so` with the NDK:
+
+   ```sh
+   .venv/bin/python recomp/gen.py --exefs build/extracted/v0/exefs --out generated/v0-android --target android --patches recomp/patches-v0.txt
+   .venv/bin/python tools/build_game.py --version v0 --gen generated/v0-android --target android
+   ```
+
+3. The shader translator for Android (`build/xlate-android/totk_xlate`), in an arm64 container with the NDK's
+   `toolchains/llvm/prebuilt/<host>` folder mounted (its sysroot and runtime libraries are the same on every host). In a
+   git worktree, mount the main checkout's `.git` as well:
+
+   ```sh
+   docker build --platform linux/arm64 -t totk-xlate-android -f tools/android/xlate.Dockerfile tools/android
+   docker run --rm --platform linux/arm64 -v "$PWD:$PWD" -w "$PWD" \
+       -v "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64:/ndk:ro" totk-xlate-android \
+       sh -c 'git config --global --add safe.directory "*" && python3 tools/build_xlate.py --android /ndk'
+   ```
+
+4. The APK, `build/v0-android/totk.apk`, then install it and push the game data (the 17 GB `romfs.bin` once) into
+   `/storage/emulated/0/Android/data/com.totkrecomp/files`:
+
+   ```sh
+   .venv/bin/python tools/build_apk.py --version v0
+   .venv/bin/python tools/install_android.py --version v0
+   ```
+
+Start "TotK Recomp" on the device. The log goes to logcat (`adb logcat -s totk`), settings to `totk.ini` in the data
+folder. The Android device profile (`runtime/cfg.c`) runs the game in handheld mode at 30 fps. A probe or another
+command line goes through the launch intent; quote it for the device's shell:
+
+```sh
+adb shell "am start -n com.totkrecomp/.MainActivity --es args '--probe-kernel'"
+```
+
+Shaders are translated on the device the first time they are met (the translator runs from the APK's native library
+folder), so the first minutes stutter until the cache in the data folder fills.
+
 ## Checks
 
 Before a commit:

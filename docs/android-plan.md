@@ -4,6 +4,25 @@ Final draft after one review pass. Target: AYN Thor Max (Snapdragon 8 Gen 2: 1x 
 2.8 GHz cpufreq policy, 3x A510; Adreno 740; 16 GB RAM; Android 13, likely a 5.15 GKI kernel). Build host: Apple M4.
 Marks: (verified) checked in code, by a compile or in a primary source; (unverified) still to check on the device.
 
+## Status (2026-11-01)
+
+Done, and how it was checked:
+- Guest acquire/release ordering made seq_cst (`cpu.h`, `lifter.py`): codegen checked for x86-64 and aarch64, the atomic
+  differential test passes on both.
+- The fork's aarch64 work merged; TotK 1.0.0 added as a game version (boot checkpoints, patch table, spin waits).
+- NDK build of `libtotk.so` (API 33), APK packaging without Gradle, data install over adb, the Android device profile,
+  and the shader translator built for bionic and shipped in the APK (docs/building.md, "Android").
+- aarch64 Linux (Docker on the M4): the probes pass and the game runs 120 s headless into the world.
+- arm64 Android 16 emulator, inside the app: `--selftest`, `--probe-mem`, `--probe-kernel` pass; the game runs 90 s
+  headless (3526 frames, 56 threads, the save written).
+
+Open, in order:
+1. GPU on the Thor: no Android GPU has run the Vulkan path yet (the emulator lacks push descriptors). Qualcomm's driver
+   probably lacks BC textures; load Mesa Turnip or patch the driver with libadrenotools' bcenabler (functions through
+   volk), or write the compute BC decoder.
+2. Window lifecycle: recreate the surface when the app returns from the background.
+3. Milestone 0 measurements on the device, then frame pacing and the speed work of sections 2 and 5.
+
 ## 0. Starting point
 
 - Upstream closed Android as out of scope (`valentderah/totk-pc-recomp#161`, an Odin 2 Portal Max with the same SoC):
