@@ -195,9 +195,13 @@ Plan and status: [android-plan.md](android-plan.md); analysis: [android.md](andr
 
 Status: the game runs headless (`gpu = null` in `totk.ini`) inside the app on an arm64 Android 16 emulator, 90 s
 into the world with its save written, and `--selftest`, `--probe-mem` and `--probe-kernel` pass there. The Vulkan
-path has run on no Android GPU yet: the emulator's SwiftShader lacks `VK_KHR_push_descriptor`. Qualcomm's own driver
-probably lacks BC textures, which the back end requires (`vk: required feature missing ... textureCompressionBC`);
-loading Mesa Turnip or patching the driver through libadrenotools is the planned answer.
+path has run on no Android GPU yet: the emulator's SwiftShader lacks `VK_KHR_push_descriptor`. On a GPU without BC
+formats (Qualcomm's own driver) the game's BC textures are decoded on the CPU at upload (`runtime/tex_bc.c`; the log
+says `no BC formats`), at four to eight times their memory: the title screen alone loads dozens of 3686x3686 BC1
+textures, 69 MiB each decoded (the log's `BC on the CPU` line counts it), so a 5.5 GB container ran out before the
+title. `TOTK_FORCE_NO_BC=1` takes that path on any GPU. Loading Mesa Turnip, which has BC formats, through libadrenotools is the planned
+better answer. On aarch64 Linux with Mesa's software driver (lavapipe) the game renders its title screen, which checks
+the whole graphics path on ARM short of an Adreno.
 
 Requirements on the build machine (verified on an Apple M4 Mac):
 

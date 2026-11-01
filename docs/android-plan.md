@@ -17,10 +17,14 @@ Done, and how it was checked:
   headless (3526 frames, 56 threads, the save written).
 
 Open, in order:
-1. GPU on the Thor: no Android GPU has run the Vulkan path yet (the emulator lacks push descriptors). Qualcomm's driver
-   probably lacks BC textures; load Mesa Turnip or patch the driver with libadrenotools' bcenabler (functions through
-   volk), or write the compute BC decoder.
-2. Window lifecycle: recreate the surface when the app returns from the background.
+1. GPU on the Thor: no Android GPU has run the Vulkan path yet (the emulator lacks push descriptors). Without BC
+   formats the textures are now decoded on the CPU (`tex_bc.c`), at 4-8x their memory (several GB by the title
+   screen), and the game's own BC4 encoder draws are left out; it is a last resort. Depth clip control stays required:
+   making it optional (the translator's z rewrite) rendered only black on lavapipe and was taken out again; ANGLE needs
+   the extension, so Qualcomm's current drivers are expected to have it. Loading Mesa Turnip, or patching the driver with libadrenotools'
+   bcenabler (functions through volk), is the better answer; building libadrenotools waits for the user's go-ahead.
+2. Window lifecycle: done in code (surface released going to the background, made again on return), untested on a
+   device.
 3. Milestone 0 measurements on the device, then frame pacing and the speed work of sections 2 and 5.
 
 ## 0. Starting point
