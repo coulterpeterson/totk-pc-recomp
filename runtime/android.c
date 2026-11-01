@@ -3,7 +3,8 @@
 // - TOTK_HOME, the app's external files folder (/storage/emulated/0/Android/data/<package>/files). The runtime keeps
 //   its files beside its executable (totk.ini, romfs-index.bin, shader caches, logs; plat_exe_path), and an app has
 //   none, so platform/linux.c reports <TOTK_HOME>/totk as its executable. The game data goes there too: exefs/,
-//   romfs/romfs.bin and profile/ (main.c portable_paths).
+//   romfs/romfs.bin and profile/ (main.c portable_paths). profile/ is made here, as main.c takes it only when it is
+//   there and would otherwise use the build machine's path.
 // - stdout and stderr, which go nowhere in an app, copied line by line to logcat under the tag "totk". The copy runs
 //   on a thread of its own, so plat_exit drains it (android_log_drain) before the process ends: a fatal error's last
 //   lines are the ones that matter.
@@ -109,6 +110,9 @@ int SDL_main(int argc, char **argv) {
         return 1;
     }
     mkdir(home, 0770);
+    char profile[1024];
+    snprintf(profile, sizeof profile, "%s/profile", home);
+    mkdir(profile, 0770);
     setenv("TOTK_HOME", home, 1);
     if (chdir(home)) __android_log_print(ANDROID_LOG_WARN, "totk", "chdir %s: %s", home, strerror(errno));
     find_translator(home);
