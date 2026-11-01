@@ -53,9 +53,7 @@ void rt_fatal(const char *fmt, ...) {
     plat_commit_info(&proc, &used, &limit);
     rt_log("fatal: memory commit: this process %.0f MB, the system %.0f of %.0f MB", proc, used, limit);
     kern_free_cores_note();
-    fflush(stdout);
-    fflush(stderr);
-    _Exit(70);
+    plat_exit(70);   // flushes stdout and stderr (on Android also the copy to logcat, android.c)
 }
 
 static const RtModule *module_at(uint64_t pc) {
