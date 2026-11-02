@@ -248,10 +248,14 @@ SI void simd_rm_leave(unsigned old) {
 }
 
 // The thread's MXCSR mirrors the guest FPCR.FZ with RC = nearest whenever guest code runs (cpu.h rt_fpcr_sync), so
-// plain host FP gives the ARM result unless FPCR.RMode asks for directed rounding, which the slow paths handle.
+// plain host FP gives the ARM result unless FPCR.RMode asks for directed rounding, which the slow paths handle. (An
+// AArch64 host's FPCR holds the guest's RMode too, but the helpers that compute an op in several host steps, such as
+// RSQRTS, still need the slow path's care for directed rounding.)
 SI int simd_directed(const Cpu *c) { return __builtin_expect((c->fpcr & FPCR_RM) != 0, 0); }
 
 #define F s
+#define AS "s"   // AArch64 operand modifiers: scalar register, vector arrangement
+#define AV "4s"
 #define T float
 #define U uint32_t
 #define NB 32
@@ -272,7 +276,11 @@ SI int simd_directed(const Cpu *c) { return __builtin_expect((c->fpcr & FPCR_RM)
 #undef VTU
 #undef VTS
 #undef NL
+#undef AS
+#undef AV
 #define F d
+#define AS "d"
+#define AV "2d"
 #define T double
 #define U uint64_t
 #define NB 64
@@ -293,6 +301,8 @@ SI int simd_directed(const Cpu *c) { return __builtin_expect((c->fpcr & FPCR_RM)
 #undef VTU
 #undef VTS
 #undef NL
+#undef AS
+#undef AV
 
 // ---- precision conversions (FCVT, FCVTL/N, FCVTXN); FZ flushes single/double inputs, never halves
 SI double simd_s2d(Cpu *c, float x) {

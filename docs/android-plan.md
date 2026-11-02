@@ -98,6 +98,15 @@ Done, and how it was checked:
 - So a cheaper lifter can take perhaps 10-15% off the chain (vector registers and FPCR in locals, native NaN lanes,
   a faster `rt_dispatch`), which makes 35-40 fps at 120 Hz possible, not 60. Twice as fast needs the game's own ARM64
   code to run as it is (native execution, "2. CPU" item 5), and 60 fps also needs the GPU's 21 ms under 16.7.
+- First lever, measured: on an AArch64 host the FP helpers now run the host's own instruction for add, subtract,
+  multiply, divide, square root, fused multiply-add, min and max, scalar and vector (`runtime/simd_fp.h` FN(hw)), with
+  the guest's RMode, FZ and DN in the host FPCR (`runtime/cpu.h` rt_fpcr_sync): no FPCR load and no NaN check per op,
+  and NaN lanes no longer redone lane by lane. `tests/diff/simd.py` passes on aarch64 (the full run and passes over the
+  FP families with 48 cases an encoding). Two alternating pairs of runs (`trace = perf,sched`, a crit recording at
+  world 150 s): game threads' running time on the critical path 26.12 and 26.70 ms against 26.55 and 26.90 ms before,
+  30 fps either way. About 1%, within the runs' noise.
+- What else is on the critical path besides running: waits for a virtual core 2.0-2.5 ms, wake latency 1.8-2.0 ms,
+  the main thread in host calls 1.4-2.0 ms. 40 fps (25 ms) needs about 8 ms off the 33.
 
 Open, in order:
 1. Game code speed on the chain, for 40 fps at 120 Hz: vector registers and FPCR in function locals (`recomp/regs.py`),

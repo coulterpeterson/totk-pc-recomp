@@ -44,11 +44,12 @@ static inline uint64_t rt_get_fpcr(void) { uint64_t v; __asm__ volatile("mrs %0,
 static inline uint64_t rt_get_fpsr(void) { uint64_t v; __asm__ volatile("mrs %0, fpsr" : "=r"(v)); return v; }
 static inline void rt_set_fpcr(uint64_t v) { __asm__ volatile("msr fpcr, %0" :: "r"(v)); }
 static inline void rt_set_fpsr(uint64_t v) { __asm__ volatile("msr fpsr, %0" :: "r"(v)); }
-// Code lifted with --simd=c keeps the guest FPCR in c->fpcr (as on x86-64, below). The host FPCR mirrors its FZ with
-// RMode = nearest, so plain host FP gives the ARM result outside the slow paths of runtime/simd.h. Same call sites.
+// Code lifted with --simd=c keeps the guest FPCR in c->fpcr (as on x86-64, below). The host FPCR mirrors its RMode, FZ
+// and DN, so the host's own FP instructions give the guest's results, NaNs, flushing and rounding included
+// (runtime/simd_fp.h FN(hw)), and the helpers need no slow path for directed rounding. Same call sites.
 static inline void rt_fpcr_sync(const Cpu *c) {
     uint64_t cur = rt_get_fpcr();
-    uint64_t want = (cur & ~((3ull << 22) | (1ull << 24))) | (c->fpcr & (1ull << 24));
+    uint64_t want = (cur & ~(0xFull << 22)) | (c->fpcr & (0xFull << 22));
     if (cur != want) rt_set_fpcr(want);
 }
 #else

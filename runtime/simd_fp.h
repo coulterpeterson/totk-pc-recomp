@@ -28,6 +28,12 @@ SI T FN(flush)(T x) {
 }
 // FPCR.FZ input flush for helpers that run host FP.
 SI T FN(fz)(Cpu *c, T x) { return c->fpcr & FPCR_FZ ? FN(flush)(x) : x; }
+// The same before a host FP instruction: an AArch64 host flushes the inputs itself (its FPCR.FZ is the guest's).
+#if defined(__aarch64__)
+#define FN_HFZ(c, x) (x)
+#else
+#define FN_HFZ(c, x) FN(fz)(c, x)
+#endif
 SI T FN(neg)(T x) { return FN(fv)(FN(fb)(x) ^ SGN); }
 
 // FPProcessNaN(s): first signalling NaN (quietened), else first quiet NaN, else (invalid op) default NaN
@@ -172,8 +178,61 @@ SN T FN(redo)(Cpu *c, int op, T a, T b, T d, T r) {
     return FBAD(op, r) ? FN(fix)(c, op, a, b, d) : r;
 }
 
+#if defined(__aarch64__)
+// An AArch64 host's own instruction gives the guest's result, NaN propagation, flushing and rounding included, while the
+// host FPCR holds the guest's RMode, FZ and DN (cpu.h rt_fpcr_sync). Inline asm keeps the operand order,
+// which picks the NaN when both are NaNs: LLVM treats fadd and fmul as commutative. RECPS and RSQRTS are not here:
+// their callers pass the first operand negated already, and the host instructions negate it themselves.
+#define FHW(op) ((op) != FOP_RECPS && (op) != FOP_RSQRTS)
+#define HW2(ins, s) __asm__(ins " %" s "0, %" s "1, %" s "2" : "=w"(r) : "w"(a), "w"(b))
+SI T FN(hw)(int op, T a, T b, T d) {
+    T r;
+    switch (op) {
+    case FOP_ADD: HW2("fadd", AS); break;
+    case FOP_SUB: HW2("fsub", AS); break;
+    case FOP_MUL: HW2("fmul", AS); break;
+    case FOP_MULX: HW2("fmulx", AS); break;
+    case FOP_NMUL: HW2("fnmul", AS); break;
+    case FOP_DIV: HW2("fdiv", AS); break;
+    case FOP_ABD: HW2("fabd", AS); break;
+    case FOP_SQRT: __asm__("fsqrt %" AS "0, %" AS "1" : "=w"(r) : "w"(a)); break;
+    case FOP_MADD: __asm__("fmadd %" AS "0, %" AS "1, %" AS "2, %" AS "3" : "=w"(r) : "w"(b), "w"(d), "w"(a)); break;
+    case FOP_MAX: HW2("fmax", AS); break;
+    case FOP_MIN: HW2("fmin", AS); break;
+    case FOP_MAXNM: HW2("fmaxnm", AS); break;
+    default: HW2("fminnm", AS); break;
+    }
+    return r;
+}
+#undef HW2
+#define HW2(ins) __asm__(ins " %0." AV ", %1." AV ", %2." AV : "=w"(r) : "w"(a), "w"(b))
+SI VT FN(vhw)(int op, VT a, VT b, VT d) {
+    VT r;
+    switch (op) {
+    case FOP_ADD: HW2("fadd"); break;
+    case FOP_SUB: HW2("fsub"); break;
+    case FOP_MUL: HW2("fmul"); break;
+    case FOP_MULX: HW2("fmulx"); break;
+    case FOP_NMUL: HW2("fmul"); r = (VT)((VTU)r ^ SGN); break;   // no vector FNMUL; FPNeg of the product, NaN too
+    case FOP_DIV: HW2("fdiv"); break;
+    case FOP_ABD: HW2("fabd"); break;
+    case FOP_SQRT: __asm__("fsqrt %0." AV ", %1." AV : "=w"(r) : "w"(a)); break;
+    case FOP_MADD: __asm__("fmla %0." AV ", %2." AV ", %3." AV : "=w"(r) : "0"(a), "w"(b), "w"(d)); break;
+    case FOP_MAX: HW2("fmax"); break;
+    case FOP_MIN: HW2("fmin"); break;
+    case FOP_MAXNM: HW2("fmaxnm"); break;
+    default: HW2("fminnm"); break;
+    }
+    return r;
+}
+#undef HW2
+#endif
+
 // Scalar FP op (constant op folds the selection). RMode = nearest runs on the host, with or without FZ.
 SI T FN(op)(Cpu *c, int op, T a, T b, T d) {
+#if defined(__aarch64__)
+    if (FHW(op)) return FN(hw)(op, a, b, d);   // the host rounds in the guest's mode: no FPCR check
+#endif
     if (simd_directed(c)) return FN(slow)(c, op, a, b, d);
     if (FMINMAX(op)) {
         if (c->fpcr & FPCR_FZ) a = FN(flush)(a), b = FN(flush)(b);
@@ -206,6 +265,9 @@ SI VT FN(vflush)(VT a) {
 
 // Vector FP op: native lanes; any lane FREDO flags (or FPCR.RMode) reruns all lanes through the scalar path.
 SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
+#if defined(__aarch64__)
+    if (FHW(op)) return FN(vhw)(op, a, b, d);
+#endif
     if (simd_directed(c)) return FN(vslow)(c, op, a, b, d);
     VT r;
     if (FMINMAX(op)) {
@@ -225,15 +287,20 @@ SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
 }
 
 SI VT FN(vfz)(Cpu *c, VT a) { return c->fpcr & FPCR_FZ ? FN(vflush)(a) : a; }
+#if defined(__aarch64__)
+#define FN_VHFZ(c, x) (x)
+#else
+#define FN_VHFZ(c, x) FN(vfz)(c, x)
+#endif
 
 // ---- compares
 SI uint64_t FN(cmp)(Cpu *c, T a, T b) { // FCMP NZCV
-    a = FN(fz)(c, a), b = FN(fz)(c, b);
+    a = FN_HFZ(c, a), b = FN_HFZ(c, b);
     return a == b ? 0x60000000ull : a < b ? 0x80000000ull : a > b ? 0x20000000ull : 0x30000000ull;
 }
 // FCMEQ/FCMGE/FCMGT/FACGE/FACGT (op 0..4)
 SI VTU FN(vcmp)(Cpu *c, int op, VT a, VT b) {
-    a = FN(vfz)(c, a), b = FN(vfz)(c, b);
+    a = FN_VHFZ(c, a), b = FN_VHFZ(c, b);
     if (op >= 3) a = __builtin_elementwise_abs(a), b = __builtin_elementwise_abs(b);
     switch (op) {
     case 0: return (VTU)(a == b);
@@ -243,10 +310,16 @@ SI VTU FN(vcmp)(Cpu *c, int op, VT a, VT b) {
 }
 
 // ---- rounding to integral (FRINT*): rm 0 N, 1 P, 2 M, 3 Z, 4 A; 5 X / 6 I = FPCR mode
-// (rint = ties-to-even: the host stays in round-to-nearest outside the slow paths; no roundeven in MinGW's CRT)
+// (x86-64: rint = ties-to-even, as the host stays in round-to-nearest outside the slow paths; no roundeven in MinGW's
+// CRT. AArch64: the host rounds in the guest's mode, roundeven is FRINTN.)
+#if defined(__aarch64__)
+#define RNDN(x) __builtin_elementwise_roundeven(x)
+#else
+#define RNDN(x) __builtin_elementwise_rint(x)
+#endif
 SI T FN(rnd)(T x, int rm) {
     switch (rm) {
-    case 0: return __builtin_elementwise_rint(x);
+    case 0: return RNDN(x);
     case 1: return __builtin_elementwise_ceil(x);
     case 2: return __builtin_elementwise_floor(x);
     case 3: return __builtin_elementwise_trunc(x);
@@ -254,18 +327,18 @@ SI T FN(rnd)(T x, int rm) {
     }
 }
 SI T FN(frint)(Cpu *c, T x, int rm) {
-    x = FN(fz)(c, x);
+    x = FN_HFZ(c, x);
     if (rm >= 5) rm = (int)((c->fpcr >> 22) & 3);
     T r = FN(rnd)(x, rm);
     if (__builtin_expect(r != r, 0)) r = FN(nan1)(c, x);
     return r;
 }
 SI VT FN(vfrint)(Cpu *c, VT x, int rm) {
-    x = FN(vfz)(c, x);
+    x = FN_VHFZ(c, x);
     if (rm >= 5) rm = (int)((c->fpcr >> 22) & 3);
     VT r;
     switch (rm) {
-    case 0: r = __builtin_elementwise_rint(x); break;
+    case 0: r = RNDN(x); break;
     case 1: r = __builtin_elementwise_ceil(x); break;
     case 2: r = __builtin_elementwise_floor(x); break;
     case 3: r = __builtin_elementwise_trunc(x); break;
@@ -279,7 +352,7 @@ SI VT FN(vfrint)(Cpu *c, VT x, int rm) {
 
 // ---- FP -> integer (FCVT[NPMZA][SU], fixed point): saturating, NaN -> 0. ib = 32/64.
 SI uint64_t FN(toint)(Cpu *c, T x, int rm, int fbits, int ib, int uns) {
-    x = FN(fz)(c, x);
+    x = FN_HFZ(c, x);
     if (fbits) x = x * (T)(1ull << (fbits - 1)) * K(2);
     T r = FN(rnd)(x, rm);
     if (r != r) return 0;
