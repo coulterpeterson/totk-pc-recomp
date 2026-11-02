@@ -18,8 +18,9 @@
 
 // Required (device choice fails without them): Vulkan 1.3; VK_KHR_swapchain, VK_KHR_push_descriptor,
 // VK_EXT_depth_clip_control, VK_EXT_external_memory_host; features timelineSemaphore, dynamicRendering,
-// synchronization2, shaderStorageImageWriteWithoutFormat, depthClipControl, shaderInt64, samplerAnisotropy,
-// independentBlend, geometryShader. Without textureCompressionBC the BC textures are decoded on the CPU (tex_bc.c).
+// synchronization2, shaderStorageImageWriteWithoutFormat, depthClipControl, samplerAnisotropy, independentBlend,
+// geometryShader. shaderInt64 is not among them: no shader of ours or of totk_xlate uses 64-bit integers, and
+// Qualcomm's Adreno driver lacks it. Without textureCompressionBC the BC textures are decoded on the CPU (tex_bc.c).
 // Optional (flag set in VkCtx when enabled): the has_* members.
 typedef struct VkCtx {
     VkInstance instance;

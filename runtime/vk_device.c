@@ -334,7 +334,6 @@ static int create_device(void) {
     else if (!c->f13.synchronization2) miss = "synchronization2";
     else if (!h->shaderStorageImageWriteWithoutFormat) miss = "shaderStorageImageWriteWithoutFormat";
     else if (!c->clip.depthClipControl) miss = "depthClipControl";
-    else if (!h->shaderInt64) miss = "shaderInt64";
     else if (!h->samplerAnisotropy) miss = "samplerAnisotropy";
     else if (!h->independentBlend) miss = "independentBlend";
     else if (!h->geometryShader) miss = "geometryShader";

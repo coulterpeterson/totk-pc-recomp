@@ -32,6 +32,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "platform/platform.h"
+
 int totk_main(int argc, char **argv);
 
 static int log_pipe[2] = {-1, -1};
@@ -71,7 +73,7 @@ static void log_to_logcat(void) {
     if (pthread_create(&log_thread, NULL, log_pump, NULL)) log_pipe[0] = -1;
 }
 
-// Called by plat_exit before _exit, and when SDL_main returns: once stdout, stderr and the pipe's own write end are
+// Called by plat_exit before _exit (SDL_main ends through it too): once stdout, stderr and the pipe's own write end are
 // closed, the pump reads what is left, sees the end of the pipe and returns.
 void android_log_drain(void) {
     static int drained;
@@ -165,7 +167,8 @@ int SDL_main(int argc, char **argv) {
     find_gpu_driver(home);
     __android_log_print(ANDROID_LOG_INFO, "totk", "home %s, %d arguments", home, argc - 1);
     int code = totk_main(argc, argv);
-    android_log_drain();
-    return code;
+    // A desktop process ends when main returns and takes its threads with it. Returning to SDLActivity instead would
+    // let it shut SDL down while the window thread still pumps events (a FORTIFY abort on a destroyed mutex).
+    plat_exit(code);
 }
 #endif
