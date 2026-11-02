@@ -219,8 +219,8 @@ uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t m
 // Before the kernel writes into guest memory (a file read): the pages of [addr, addr + n) accept writes without a
 // fault and count as written. A no-op where plat_mem_written does not use page protection.
 void plat_mem_unarm(uint64_t addr, uint64_t n);
-// [addr, addr + n) is tracked as one unit (on) or page by page again (0): a write fault opens every page of it and all
-// count as written. For memory whose mappings the kernel never merges again (a driver's, vk_memory.c placed_pool),
+// [addr, addr + n) is tracked in units of 64 KiB at fixed boundaries (on) or page by page again (0): a write fault
+// opens every page of its unit and all count as written. For memory whose mappings the kernel never merges again (a driver's, vk_memory.c placed_pool),
 // where page-sized protection changes would leave a mapping per page until the process runs out of them. A no-op where
 // plat_mem_written does not use page protection.
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on);

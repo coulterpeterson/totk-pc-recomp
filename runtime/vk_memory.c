@@ -115,7 +115,7 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
 // are copied over at the switch; when the pool goes, the range gets ordinary memory and its bytes back. The memory
 // is coherent and CPU-cached (the guest reads it as its own); a device without such a type, a range not aligned for
 // a placed mapping, or a failed mapping leaves the pool to shadow storage. TOTK_PLACED=0 turns it off. The write watch
-// tracks a placed pool as one unit (plat_mem_track_unit): the kernel never merges the driver's mappings again.
+// tracks a placed pool in 64 KiB units (plat_mem_track_unit): the kernel never merges the driver's mappings again.
 // Measured on the AYN Thor (Turnip) over four minutes outdoors: 28.9 fps against 27.5 with shadow storage, and about
 // 1 GB less memory.
 static int placed_on;
@@ -179,7 +179,7 @@ static int placed_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     free(keep);
     // The driver's mappings are never merged again by the kernel: page-sized protection changes over them left a
     // mapping per page until the process had 65530 and mprotect failed, and a write then faulted forever (the game
-    // stopped a few seconds into play on the AYN Thor). The pool is tracked as one unit instead.
+    // stopped a few seconds into play on the AYN Thor). The pool is tracked in 64 KiB units instead.
     plat_mem_track_unit(lo, n, 1);
     plat_mem_unarm(lo, n);   // the new pages are writable and unwatched: written, until the next query arms them
     r->import_lo = lo, r->import_hi = hi, r->buf = buf, r->mem = mem, r->placed = 1;

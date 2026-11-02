@@ -913,7 +913,11 @@ static PlatMutex vm_lock = PLAT_MUTEX_INIT;   // reservations; with mp_on also t
 static int ww_tried, mp_on;          // mp_on: the mprotect write watch above
 static uint64_t *mp_dirty;           // a bit per 4 KiB page below PS_LIMIT
 // plat_mem_track_unit: pages tracked in units (a bit per page) and the first page of each unit, which ends at the next
-// first page or the first page outside; mapped on first use, read by the fault handler without a lock
+// first page or the first page outside; mapped on first use, read by the fault handler without a lock. A range is
+// cut into units of UNIT_PAGES at fixed boundaries: a whole placed pool as one unit made every texture stored in it
+// count as written at any write into the pool (1000 re-uploads, 320 MiB, every 60 frames on the AYN Thor); 64 KiB
+// keeps that local while the mappings stay bounded (one per unit at most).
+#define UNIT_PAGES 16
 static uint64_t *mp_unit, *mp_unit_first;
 static struct { uint64_t lo, hi; } mp_range[8];
 static int mp_ranges;
@@ -1055,7 +1059,7 @@ void plat_mem_track_unit(uint64_t addr, uint64_t n, int on) {
         uint64_t m = 1ull << (p % 64);
         if (on) __atomic_fetch_or(&mp_unit[p / 64], m, __ATOMIC_RELEASE);
         else __atomic_fetch_and(&mp_unit[p / 64], ~m, __ATOMIC_RELEASE);
-        if (on && p == p0) __atomic_fetch_or(&mp_unit_first[p / 64], m, __ATOMIC_RELEASE);
+        if (on && (p == p0 || p % UNIT_PAGES == 0)) __atomic_fetch_or(&mp_unit_first[p / 64], m, __ATOMIC_RELEASE);
         else __atomic_fetch_and(&mp_unit_first[p / 64], ~m, __ATOMIC_RELEASE);
     }
     plat_mutex_unlock(&vm_lock);
