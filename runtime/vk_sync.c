@@ -321,8 +321,7 @@ void vk_sync_start(void) {
 // The index of a command buffer the GPU no longer uses, claimed for value `fence`. Called with sub_lock held; may move
 // slots[].
 static int claim_slot(VkCtx *c, uint64_t fence) {
-    uint64_t gpu = 0;
-    vkGetSemaphoreCounterValue(c->device, c->timeline, &gpu);
+    uint64_t gpu = __atomic_load_n(&done, __ATOMIC_ACQUIRE);   // not the driver's value: see vk_memory.c collect_locked
     for (int i = 0; i < nslots; i++)
         if (slots[i].fence <= gpu) {
             slots[i].fence = fence;

@@ -1906,8 +1906,10 @@ static void retire(VkCtx *c, int wait_all) {
 
 static void collect_locked(VkCtx *c) {
     retire(c, 0);
-    uint64_t tl = 0;
-    if (c->timeline) vkGetSemaphoreCounterValue(c->device, c->timeline, &tl);
+    // The completion thread's value rather than the driver's: done once its side effects ran, never ahead of the GPU.
+    // vkGetSemaphoreCounterValue here blocked the presenting thread about 16 ms a frame on the AYN Thor (Turnip on
+    // Qualcomm's kernel driver: a driver lock the completion thread's vkWaitSemaphores holds).
+    uint64_t tl = vk_sync_fence_done();
     int k = 0;
     for (int i = 0; i < ndead; i++) {
         Dead *d = &dead[i];
