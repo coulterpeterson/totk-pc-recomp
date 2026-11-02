@@ -3,7 +3,8 @@
 The APK is SDL's Java activity (SDL 3.4, from tools/build_android_deps.py's source tree), tools/android/'s manifest and
 MainActivity, libSDL3.so, libtotk.so, the shader translator as libtotk_xlate.so (tools/build_xlate.py --android;
 an app runs programs only from its native library folder) and libadrenotools' four hook libraries, which it loads from
-that folder when a player's Vulkan driver is in gpu_driver/. No Gradle: javac, the SDK's d8, aapt2, zipalign and
+that folder when a player's Vulkan driver is in gpu_driver/. The launcher icon is the game's own, from the player's
+dump (tools/extract.py puts it into <work>/extracted/v0/control/); without it the APK has Android's default icon. No Gradle: javac, the SDK's d8, aapt2, zipalign and
 apksigner do the steps. The libraries are stored uncompressed and page-aligned.
 It is signed with the local debug key (~/.android/debug.keystore, made with keytool when missing).
 
@@ -74,6 +75,8 @@ def main():
     hooks = [DEPS / 'arm64-v8a' / 'lib' / name for name in ADRENOTOOLS_HOOKS]   # libadrenotools loads them (driver_load)
     if not all(h.is_file() for h in hooks):
         sys.exit('libadrenotools hooks not found: run tools/build_android_deps.py --only libadrenotools')
+    from build_game import work_dir
+    icon = work_dir() / 'extracted' / 'v0' / 'control' / 'icon_AmericanEnglish.dat'   # the base game's, for any version
     xlate = ROOT / 'build' / 'xlate-android' / 'totk_xlate'
     if not xlate.is_file():
         sys.exit(f'{xlate} not found: run tools/build_xlate.py --android')
@@ -92,8 +95,20 @@ def main():
         run(['javac', '-nowarn', '-Xlint:none', '--release', '11', '-classpath', jar, '-d', tmp / 'classes', *sources])
         run([tools / 'd8', '--release', '--min-api', MIN_SDK, '--lib', jar, '--output', tmp,
              *sorted((tmp / 'classes').rglob('*.class'))])
-        run([tools / 'aapt2', 'link', '-o', tmp / 'base.apk', '--manifest', ANDROID / 'AndroidManifest.xml', '-I', jar,
-             '--min-sdk-version', MIN_SDK, '--target-sdk-version', COMPILE_SDK,
+        manifest, resources = ANDROID / 'AndroidManifest.xml', []
+        if icon.is_file():   # the game's icon, a 256x256 JPEG, as the launcher icon
+            (tmp / 'res' / 'mipmap').mkdir(parents=True)
+            shutil.copy2(icon, tmp / 'res' / 'mipmap' / 'ic_launcher.jpg')
+            run([tools / 'aapt2', 'compile', '--dir', tmp / 'res', '-o', tmp / 'res.zip'])
+            resources = [tmp / 'res.zip']
+            manifest = tmp / 'AndroidManifest.xml'
+            text = (ANDROID / 'AndroidManifest.xml').read_text(encoding='utf-8')
+            manifest.write_text(text.replace('<application\n', '<application\n        android:icon="@mipmap/ic_launcher"\n', 1),
+                                encoding='utf-8')
+        else:
+            print(f'note: {icon} not found (tools/extract.py extracts it): the APK gets the default icon')
+        run([tools / 'aapt2', 'link', '-o', tmp / 'base.apk', '--manifest', manifest, '-I', jar,
+             '--min-sdk-version', MIN_SDK, '--target-sdk-version', COMPILE_SDK, *resources,
              '--debug-mode'])   # debuggable: run-as reads the app's files, and a debugger attaches to a crash
         so = tmp / 'libtotk.so'
         if args.keep_debug:

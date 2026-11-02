@@ -6,6 +6,9 @@ Steps, each skipped when its verified output already exists:
 2. Base RomFS, verified through all six IVFC levels.
 3. Update RomFS: hactool merges the base Program NCA with the update's BKTR section.
 
+4. The game's icon (icon_AmericanEnglish.dat, a JPEG) from the base game's Control NCA: build/extracted/v0/control/,
+   for the Android app's launcher icon (tools/build_apk.py).
+
 Steps 1 and 3 run for every file in `input.updates`. Each update's version is identified by the SHA-256 of its `main`,
 not by its file name. Output: build/extracted/v0/{exefs,romfs} and build/extracted/v<version>/{exefs,romfs}.
 
@@ -29,8 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / 'tools' / 'vendor' / 'macnativegames'
 # The vendored scripts import each other by bare module name, so their directory goes on the path before importing them.
 sys.path.insert(0, str(VENDOR))
-from extract_exefs import (common_tickets, container_entries, load_keys, nca_inventory, program_nca,  # noqa: E402
-                           record_offset, require)
+from extract_exefs import (common_tickets, container_entries, decrypt, load_keys, nca_ctr_key,  # noqa: E402
+                           nca_inventory, program_nca, read_at, record_offset, require)
 from extract_romfs import index_romfs  # noqa: E402
 from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 
@@ -165,6 +168,51 @@ def extract_base_romfs(out, keys, logs, base=None):
     run_logged([sys.executable, VENDOR / 'extract_romfs.py', '--keys', keys,
                 '--manifest', out / 'extraction-manifest.json', '--output', romfs], logs / 'extract_romfs-v0.log',
                source=base)
+
+
+ICON = 'icon_AmericanEnglish.dat'
+
+
+def extract_icon(base, keys_path, out):
+    """The base game's icon from the RomFS of its Control NCA, decrypted here as the ExeFS is (the title key comes
+    from the NSP's ticket; no key value leaves this process). Written to out/icon_AmericanEnglish.dat."""
+    from cryptography.hazmat.primitives.ciphers import modes
+    keys = load_keys(Path(keys_path))
+    with Path(base).open('rb') as f:
+        _, entries = container_entries(f, Path(base).stat().st_size)
+        tickets = common_tickets(f, entries)
+        controls = [(r, h) for r, h in nca_inventory(f, entries, keys)
+                    if r['content_type'] == 2 and r['title_id'] == '0100F2C0115B6000']
+        require(len(controls) == 1, 'Expected one Control NCA of TotK in the base game')
+        record, hdr = controls[0]
+        ctr_key = nca_ctr_key(hdr, keys, tickets)
+        for i in range(4):
+            start, end = struct.unpack_from('<II', hdr, 0x240 + 16 * i)
+            fs = hdr[0x400 + 512 * i:0x600 + 512 * i]
+            # A RomFS section (type 0) behind an IVFC hash tree (3), AES-CTR (3): its last level is the RomFS image
+            if not start or fs[2] != 0 or fs[3] != 3 or fs[8:12] != b'IVFC':
+                continue
+            require(fs[4] == 3, 'Only an AES-CTR Control RomFS is supported')
+            levels = struct.unpack_from('<I', fs, 0x14)[0]
+            off, size = struct.unpack_from('<QQ', fs, 0x18 + 0x18 * (levels - 2))
+            require(size <= 64 << 20, 'Control RomFS is implausibly large')
+            absolute = start * 512 + off
+            aligned = absolute & ~15
+            iv = fs[0x140:0x148][::-1] + (aligned // 16).to_bytes(8, 'big')
+            data = read_at(f, record_offset(record) + aligned, size + absolute - aligned)
+            image = decrypt(ctr_key, modes.CTR(iv), data)[absolute - aligned:]
+            with tempfile.TemporaryDirectory() as tmp:
+                romfs = Path(tmp) / 'control.romfs'
+                romfs.write_bytes(image)
+                files = {e['path']: e for e in index_romfs(romfs)}
+            require(ICON in files, f'No {ICON} in the Control NCA')
+            e = files[ICON]
+            icon = image[e['offset']:e['offset'] + e['size']]
+            require(icon[:3] == b'\xff\xd8\xff', f'{ICON} is not a JPEG')
+            out.mkdir(parents=True, exist_ok=True)
+            (out / ICON).write_bytes(icon)
+            return out / ICON
+    require(False, 'No RomFS section in the Control NCA')
 
 
 def program_ncas(base, update, keys_path):
@@ -312,6 +360,10 @@ def main():
         say('  extracting RomFS (17 GB)')
         extract_base_romfs(base_out, keys, logs, base)
     check_romfs(base_out / 'romfs', v0)
+    if not (base_out / 'control' / ICON).is_file():
+        say('  extracting the icon')
+        extract_icon(base, keys, base_out / 'control')
+    say(f'  icon: {shown(base_out / "control" / ICON)}')
 
     for update in updates:
         extract_update(base, Path(update), keys, args.hactool, extracted, logs, versions)
