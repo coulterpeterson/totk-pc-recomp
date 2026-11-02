@@ -114,24 +114,23 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
 // straight to memory the GPU reads, as with an import, with no shadow copy before each submission. The guest's bytes
 // are copied over at the switch; when the pool goes, the range gets ordinary memory and its bytes back. The memory
 // is coherent and CPU-cached (the guest reads it as its own); a device without such a type, a range not aligned for
-// a placed mapping, or a failed mapping leaves the pool to shadow storage. Off unless TOTK_PLACED=1: on the AYN Thor
-// (Turnip) the game stopped a few seconds into play with it, every thread waiting and the GPU's writes to CPU-visible
-// memory no longer completing; the cause is not found yet. Shadow storage cost the presenting thread there about a
-// fifth of its replay time in write-watch queries, re-protection and copies, and the game's threads a fault per first
-// write to a pool page.
+// a placed mapping, or a failed mapping leaves the pool to shadow storage. TOTK_PLACED=0 turns it off. The write watch
+// tracks a placed pool as one unit (plat_mem_track_unit): the kernel never merges the driver's mappings again.
+// Measured on the AYN Thor (Turnip) over four minutes outdoors: 28.9 fps against 27.5 with shadow storage, and about
+// 1 GB less memory.
 static int placed_on;
 static PFN_vkMapMemory2KHR p_map2;
 static PFN_vkUnmapMemory2KHR p_unmap2;
 
 void vk_mem_set_placed(const VkCtx *c) {
-    placed_on = c->has_map_placed && !strcmp(cfg_value("TOTK_PLACED"), "1");
+    placed_on = c->has_map_placed && strcmp(cfg_value("TOTK_PLACED"), "0");
     if (placed_on) {
         p_map2 = (PFN_vkMapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkMapMemory2KHR");
         p_unmap2 = (PFN_vkUnmapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkUnmapMemory2KHR");
         placed_on = p_map2 && p_unmap2;
     }
     if (placed_on) rt_log("mem: CPU-visible pools are device memory mapped over the guest's pages (VK_EXT_map_memory_placed, "
-                          "alignment %#llx; TOTK_PLACED=1, experimental)", (unsigned long long)c->min_placed_alignment);
+                          "alignment %#llx; TOTK_PLACED=0: shadow storage)", (unsigned long long)c->min_placed_alignment);
 }
 
 static int cached_coherent_type(const VkCtx *c, uint32_t bits) {
@@ -178,6 +177,10 @@ static int placed_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     }
     memcpy((void *)(uintptr_t)lo, keep, n);
     free(keep);
+    // The driver's mappings are never merged again by the kernel: page-sized protection changes over them left a
+    // mapping per page until the process had 65530 and mprotect failed, and a write then faulted forever (the game
+    // stopped a few seconds into play on the AYN Thor). The pool is tracked as one unit instead.
+    plat_mem_track_unit(lo, n, 1);
     plat_mem_unarm(lo, n);   // the new pages are writable and unwatched: written, until the next query arms them
     r->import_lo = lo, r->import_hi = hi, r->buf = buf, r->mem = mem, r->placed = 1;
     plat_inc32(&n_imports);
@@ -196,6 +199,7 @@ static void placed_release(VkCtx *c, PoolRec *r) {
         rt_fatal("vk: placed pool %#llx+%#llx: its range could not be given back", (unsigned long long)lo, (unsigned long long)n);
     memcpy((void *)(uintptr_t)lo, keep, n);
     free(keep);
+    plat_mem_track_unit(lo, n, 0);
     plat_mem_unarm(lo, n);
     r->placed = 0;
 }

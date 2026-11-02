@@ -63,8 +63,8 @@
 
 # On a GPU that cannot import the game's memory but can map its own at a chosen address (VK_EXT_map_memory_placed:
 # Turnip on Adreno), memory pools the CPU writes become GPU memory at their own address instead of copies made before
-# each submission. 0 or 1. Default: 0 (experimental: on the AYN Thor the game stopped a few seconds into play with it).
-# placed = 0
+# each submission. 0 or 1. Default: 1.
+# placed = 1
 # Game memory shared with the GPU: auto (mirror on a discrete GPU, import on an integrated one), import (host memory
 # imported into Vulkan), mirror (pools used as buffers get a copy in video memory) or verify (mirror plus a check of
 # every copy; slow).

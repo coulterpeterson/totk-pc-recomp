@@ -912,6 +912,9 @@ static int ww_fd = -1, pm_fd = -1;   // userfaultfd and /proc/self/pagemap; -1 w
 static PlatMutex vm_lock = PLAT_MUTEX_INIT;   // reservations; with mp_on also the changes of watched pages
 static int ww_tried, mp_on;          // mp_on: the mprotect write watch above
 static uint64_t *mp_dirty;           // a bit per 4 KiB page below PS_LIMIT
+// plat_mem_track_unit: pages tracked in units (a bit per page) and the first page of each unit, which ends at the next
+// first page or the first page outside; mapped on first use, read by the fault handler without a lock
+static uint64_t *mp_unit, *mp_unit_first;
 static struct { uint64_t lo, hi; } mp_range[8];
 static int mp_ranges;
 
@@ -1032,12 +1035,50 @@ void plat_mem_unarm(uint64_t addr, uint64_t n) {
     plat_mutex_unlock(&vm_lock);
 }
 
+static int bit(const uint64_t *b, uint64_t p) { return b && (__atomic_load_n(&b[p / 64], __ATOMIC_ACQUIRE) >> (p % 64) & 1); }
+
+void plat_mem_track_unit(uint64_t addr, uint64_t n, int on) {
+    if (!mp_on || !n || addr + n > PS_LIMIT) return;
+    plat_mutex_lock(&vm_lock);
+    if (!mp_unit) {
+        void *a = mmap(NULL, PS_LIMIT / PG / 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        void *b = mmap(NULL, PS_LIMIT / PG / 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (a == MAP_FAILED || b == MAP_FAILED) {
+            fprintf(stderr, "platform: cannot map the write watch's unit bitmaps (%s)\n", strerror(errno));
+            abort();
+        }
+        mp_unit_first = b;
+        __atomic_store_n(&mp_unit, a, __ATOMIC_RELEASE);
+    }
+    uint64_t p0 = addr / PG, p1 = (addr + n + PG - 1) / PG;
+    for (uint64_t p = p0; p < p1; p++) {
+        uint64_t m = 1ull << (p % 64);
+        if (on) __atomic_fetch_or(&mp_unit[p / 64], m, __ATOMIC_RELEASE);
+        else __atomic_fetch_and(&mp_unit[p / 64], ~m, __ATOMIC_RELEASE);
+        if (on && p == p0) __atomic_fetch_or(&mp_unit_first[p / 64], m, __ATOMIC_RELEASE);
+        else __atomic_fetch_and(&mp_unit_first[p / 64], ~m, __ATOMIC_RELEASE);
+    }
+    plat_mutex_unlock(&vm_lock);
+}
+
 // The SIGSEGV path of the mprotect write watch (see above): 1 when the fault was a first write to an armed page.
-// Signal context: no locks, only mprotect and an atomic.
+// Signal context: no locks, only mprotect and an atomic. A page of a unit opens the whole unit.
 static int mp_fault(uint64_t addr) {
     if (!mp_on || addr >= PS_LIMIT || !mp_watched(addr) || pstate[addr / PG] != PS_NONE + PLAT_PROT_RW) return 0;
-    if (mprotect((void *)(uintptr_t)(addr & ~(PG - 1)), PG, PROT_READ | PROT_WRITE)) return 0;
-    __atomic_fetch_or(&mp_dirty[addr / PG / 64], 1ull << (addr / PG % 64), __ATOMIC_RELEASE);
+    uint64_t lo = addr / PG, hi = lo + 1;
+    if (bit(mp_unit, lo)) {
+        while (!bit(mp_unit_first, lo) && bit(mp_unit, lo - 1)) lo--;
+        while (bit(mp_unit, hi) && !bit(mp_unit_first, hi)) hi++;
+    }
+    if (mprotect((void *)(uintptr_t)(lo * PG), (size_t)(hi - lo) * PG, PROT_READ | PROT_WRITE)) {
+        // The page stays read-only, and memory.c thaw_fault would call the fault done since pstate says read-write: the
+        // write would fault forever. vm.max_map_count is the cause seen (ENOMEM).
+        static const char msg[] = "platform: a watched page cannot be made writable again (mprotect failed: the "
+                                  "process may be at vm.max_map_count); see /proc/self/maps\n";
+        write(2, msg, sizeof msg - 1);
+        abort();
+    }
+    for (uint64_t p = lo; p < hi; p++) __atomic_fetch_or(&mp_dirty[p / 64], 1ull << (p % 64), __ATOMIC_RELEASE);
     return 1;
 }
 
