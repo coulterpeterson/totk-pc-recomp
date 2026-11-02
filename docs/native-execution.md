@@ -1,0 +1,98 @@
+# Native execution on Android (scope)
+
+The Android build lifts the game's ARM64 code to C and compiles it back to ARM64. On the AYN Thor (Snapdragon 8 Gen 2)
+that code is about three times the instructions of the original and the frame waits on it: 22-23 ms of the 28.8 ms
+critical path in performance mode is the main thread and five workers running game code ([android-plan.md](android-plan.md),
+"Status"). The host is ARM64 like the Switch, so the game's own code could run unchanged, as MacNativeGames does on
+Apple silicon and Eden's NCE does on this SoC. This document scopes that for this repository. Nothing here is built
+yet except the probe.
+
+## What runs natively, and what stays
+
+Native execution replaces only the CPU path. The rest of the runtime stays as it is: the guest kernel
+(`runtime/kernel.c`: threads, virtual cores, waits), the host functions (`runtime/hostfn.c` and the ~163 SDK
+replacements), IPC and services, the NVN front end and the Vulkan back end, memory and the write watch. The lifter
+stays for the desktop build and as the Android fallback; native is a second CPU back end for AArch64 hosts, chosen at
+build time.
+
+## The reference: MacNativeGames' rewriter
+
+MacNativeGames (MIT, `refs/MacNativeGames/games/totk`) runs TotK 1.0.0-1.4.3 natively. Its rewriter
+(`third_party/d2r/patch_nso.py`, from d2r-mobile, MIT, with TotK fixes including two for 1.0.0's `main`) runs offline
+with capstone. It writes a patched image of each module with a patch area behind it, inside branch range, and sends
+every site that cannot run unchanged to a trampoline there:
+
+| Site | 1.0.0 count (main / subsdk0 / sdk) | Replacement |
+|---|---|---|
+| `svc` | 0 / 0 / 60 | gate: save registers, switch to the host stack, call the host, return |
+| `mrs cntpct_el0` | 0 / 0 / 40 | gate (the host's `cntvct_el0` would do: both count at 19.2 MHz, below) |
+| `mrs/msr tpidr_el0`, `mrs tpidrro_el0` | 796 / 0 / 128 | load or store of a per-thread slot |
+| any use of x18 | about 29,500 / 10,200 / 12,700 | x18 lives in a per-thread slot; the instruction uses a borrowed scratch register |
+| `br x18` / `blr x18` (jump tables, calls) | 109 / 2 / 6 | landing pads; a two-word call window |
+| exclusive windows that use x18 | part of 69,700 exclusives | the whole window copied, so no store lands in the reservation |
+
+Counts from this repository's scan of 1.0.0 (capstone over `.text`; the x18 count includes a few data words). After
+the rewrite, guest code never touches the hardware x18 or TPIDR_EL0: both stay the host's. Exclusives without x18 run
+unchanged. Host functions are entered through numbered thunks that switch to a host stack and call ordinary C.
+
+## Android facts (`--probe-exec`, on the Thor)
+
+`runtime/exec_probe.c`, run inside the app (`am start ... --es args '--probe-exec'`):
+- Anonymous memory written and then made executable (mmap RW, mprotect RX) runs in the app's `untrusted_app` domain,
+  also at a fixed address below 2^39, as the modules need. The process has no seccomp filter (`Seccomp: 0`).
+- bionic uses x18 on the game's threads (the shadow call stack: `0x6e924f6000`), and a trampoline that saves it
+  around guest-style code keeps it intact. The rewriter's design, where guest code never owns x18, is what Android
+  needs as well.
+- `CNTFRQ_EL0` is 19,200,000 Hz, the Switch's frequency, and `CNTVCT_EL0` reads at EL0. `CNTPCT_EL0` traps (SIGILL),
+  so its 40 sites must be rewritten (to `cntvct_el0` or a gate).
+- `TPIDRRO_EL0` reads 0, and `TPIDR_EL0` is bionic's thread pointer.
+
+The one Apple dependency of the rewriter is how a trampoline finds its thread's slots: MacNativeGames reads
+`tpidrro_el0`, Darwin's thread-specific data base, and adds a key. On Linux that register is 0. The Android variant
+needs a base reachable in one or two instructions without a call. Candidates: a bionic TLS slot at a fixed offset
+from `TPIDR_EL0` that this process does not use (the native-bridge slot, which only a native bridge uses), checked at
+start-up and at every guest thread's creation; or a register the trampoline already has, such as a pointer stored
+at a fixed offset of the guest TLR. Deciding this is the first task of milestone 1.
+
+## What this repository has to write
+
+| Part | Size (estimate) | Notes |
+|---|---|---|
+| Rewriter variant | ~1,100 lines Python | an adapted copy of MacNativeGames' `patch_nso.py` (MIT header, `THIRD_PARTY_NOTICES.md` row) with the Android slot base, plus a site class that sends the 874 `spin` back-edges of `recomp/patches-v0.txt` to a gate (`rt_spin_gate`); outputs under `build/` |
+| Layout | small | `recomp/layout.py` gives each module room for its patch area: today `main` ends 1.6 MiB below `subsdk0` |
+| Loader | ~300 lines C | map the patched images at the layout's bases, apply the load-time word patches (fps60, realtime; the `site` lines become word patches), seal code RX |
+| Gate and thread entry | ~400 lines asm and C | an SVC gate whose frame is laid out as `Cpu`, so `kern_svc` is used unchanged; thread entry on the guest stack; host thunks that copy x0-x7/v0-v7 into a `Cpu` for the existing `GuestFn(Cpu *)` host functions and back; `rt_call` into guest code |
+| Signals | ~150 lines | a per-thread alternate stack for every guest thread (the trampolines use the 112 bytes below sp, and a signal frame there would overwrite them); the write-watch SIGSEGV, the async preemption (`kern_ap_stub` uses x18 under `-ffixed-x18` today, and its safe-point test changes from "pc in lifted code" to "pc in guest text or patch area"); crash reports with guest pcs |
+| Dropped on the native path | | `dispatch.c` and the lifted code, jump table recovery, the fiber host overrides (fibers become plain guest code), the indirect-call preemption checkpoint (SVCs and async preemption remain) |
+
+## Milestones
+
+1. **Slot base and rewrite.** Choose the slot base; run the adapted rewriter on 1.0.0's three modules and pass
+   MacNativeGames' verifiers (`structck.py`, `equiv.py`) on them. Done when the patched images and site tables build
+   under `build/v0-native/`.
+2. **Boot.** Loader, gate, thread entry and host thunks; the guest kernel's probes and `--boot` reach the title screen
+   on the Thor with native guest code.
+3. **Play.** Spin gates, async preemption, alternate stacks, crash reports; the save loads and plays outdoors for
+   30 minutes without a stop; `hang_report` works on native threads.
+4. **Measure.** The same four-minute runs and critical-path recordings as the lifted build, in both power modes.
+
+## What to expect
+
+- Speed: game code at native speed is about a third of today's 22-23 ms on the critical path, but the runtime part
+  (host functions, the guest kernel, 14% of those threads' time) and the kernel's share (13%) stay. A critical path
+  of roughly 15 ms is plausible, which leaves the GPU's 19 ms a frame (performance mode) as the limit: about 50 fps, and
+  60 only with GPU work as well ([android-plan.md](android-plan.md), item 3 of the open list).
+- Correctness: the original code runs, so the lifter's bug classes go away (FP and NEON semantics, exclusives,
+  jump tables); new ones come from the rewrite and the trampolines, and the differential tests against Unicorn do not
+  cover them. MacNativeGames' verifiers check the rewritten images.
+- Cost: about 2,000 lines of new or adapted code, mostly in milestones 1 and 2, and a second CPU back end to keep
+  working beside the lifter.
+
+## Risks
+
+- The slot base: a TLS slot another library takes later would corrupt guest registers silently; the start-up and
+  thread-creation checks must catch it.
+- Signal handlers of other libraries (ART's fault handler runs before ours through libsigchain) see guest stack
+  pointers. They do not see a guest x18 or TPIDR_EL0, as the rewrite leaves those to the host.
+- The patch area must stay within branch range of every site (±128 MiB), which holds for these module sizes.
+- MacNativeGames' rewriter is a moving reference: pin the commit, as `tools/vendor/` does for the extractors.

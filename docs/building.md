@@ -300,6 +300,9 @@ on their own (no game files, no SDL) and checks the address-space reservations a
 read, a frozen region, four writers against a draining reader, and the VMA count. `TOTK_WW=mprotect` forces the
 page-protection tracking that older kernels (Android before 6.7) use. The probe is also `totk --probe-mem`.
 
+On an AArch64 host, `--probe-exec` checks what running guest code natively needs: executable memory at a fixed
+address, x18 kept around a call, and the counter and thread registers at EL0 ([native-execution.md](native-execution.md)).
+
 Runtime probes, each a mode of `totk.exe` (the list is at the top of `runtime/main.c`): `--probe-kernel`,
 `--probe-vkexec`, `--probe-nvn-tex` and `--probe-shader` cover most runtime changes. `--probe-shader` and the draw
 part of `--probe-vkexec` translate shaders of the census below: they look for `build/<ver>/shaders/jobs.json` of the

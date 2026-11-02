@@ -130,7 +130,8 @@ Done, and how it was checked:
 Open, in order:
 1. 40 fps in performance mode: about 4 ms off a 28.8 ms chain (the main thread's 8-10 ms of game code, the replay's
    9.7 ms off the chain only with asynchronous replay), and 1.0.0's equipment cooldown fix for the real-time step.
-   For 60 fps: native execution of the guest code ("2. CPU" item 5), a separate project, and the GPU's 19 ms.
+   For 60 fps: native execution of the guest code ("2. CPU" item 5, scoped in [native-execution.md](native-execution.md)),
+   a separate project, and the GPU's 19 ms.
 2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
