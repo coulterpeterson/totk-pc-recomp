@@ -332,14 +332,44 @@ static void native_overlay(Mod *m, const char *dir, const RtLayoutEntry *lay, co
     char *g = read_text(dir, lay->name, "gates.tsv", 1);
     char *save = NULL;
     for (char *line = strtok_r(g, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-        unsigned long long ret, site;
-        unsigned imm;
+        unsigned long long ret, site, arg;
         char kind[16];
-        if (sscanf(line, "%llx %15s %u %llx", &ret, kind, &imm, &site) != 4 || strcmp(kind, "svc"))
+        if (sscanf(line, "%llx %15s %llu %llx", &ret, kind, &arg, &site) != 4 || (strcmp(kind, "svc") && strcmp(kind, "spin")))
             rt_fatal("loader: %s.gates.tsv: unexpected line %s", lay->name, line);
-        native_add_svc_site(lay->base + ret, lay->base + site, imm);
+        int spin = !strcmp(kind, "spin");   // arg: the spin wait's loop head, a module offset
+        native_add_gate(lay->base + ret, lay->base + site, spin ? lay->base + arg : arg, spin);
     }
     free(g);
+    native_add_code(lay->base, lay->base + seg[1].mem_off);
+    native_add_code(lay->base + m->patch_off, lay->base + lay->size);
+}
+
+// The patch sets' sites (tools/native/rewrite.py patchsites.tsv: set, module, offset, original, replacement or
+// page:x<n>), each checked against the word the module holds; patches.c writes them while their set is on.
+static void native_patch_sites(const char *dir) {
+    char *t = read_text(dir, "patchsites", "tsv", 1), *save = NULL;
+    int n = 0;
+    for (char *line = strtok_r(t, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        if (line[0] == '#') continue;
+        int set, reg = -1;
+        char mod[32], repl[32];
+        unsigned long long off;
+        unsigned orig, word = 0;
+        if (sscanf(line, "%d %31s %llx %x %31s", &set, mod, &off, &orig, repl) != 5)
+            rt_fatal("loader: patchsites.tsv: cannot read %s", line);
+        if (!strncmp(repl, "page:x", 6)) reg = atoi(repl + 6);
+        else word = (unsigned)strtoul(repl, NULL, 16);
+        uint64_t base = 0;
+        for (int i = 0; i < nmods; i++)
+            if (!strcmp(mods[i].pub.name, mod)) base = mods[i].pub.base;
+        if (!base) rt_fatal("loader: patchsites.tsv: no module %s", mod);
+        if (LD32(base + off) != orig)
+            rt_fatal("loader: patch site %s+%#llx holds %08x, not the original %08x", mod, off, LD32(base + off), orig);
+        native_add_patch(set, base + off, orig, word, reg);
+        n++;
+    }
+    free(t);
+    rt_log("loader: %d patch site words for the patch sets", n);
 }
 #endif
 
@@ -551,6 +581,7 @@ void ldr_load(const char *exefs_dir) {
     verify_identity();
     for (int i = 0; i < nmods; i++) seal(&mods[i]);
 #ifdef RT_NATIVE
+    native_patch_sites(exefs_dir);
     native_init();
 #endif
     for (int i = 0; i < nmods; i++) {

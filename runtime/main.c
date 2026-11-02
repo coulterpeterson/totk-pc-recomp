@@ -231,6 +231,22 @@ static void crash_handler(const PlatCrash *x) {
     rt_log_raw("\n", 1);
     uint64_t f = lifted_function(rip);
     if (f) rt_logf("  in lifted function f_%llx = %s\n", (unsigned long long)f, ldr_describe(f, d, sizeof d));
+    if (x->guest) {   // native execution: the guest's own registers at the fault, and its frame chain
+        rt_logf("  in guest code %s\n", ldr_describe(rip, d, sizeof d));
+        for (int i = 0; i < 31; i++)
+            rt_logf("  x%-2d %016llx%s", i, (unsigned long long)x->gregs[i], i % 4 == 3 ? "\n" : "");
+        rt_logf("  sp  %016llx  lr %s\n", (unsigned long long)x->gregs[31], ldr_describe(x->gregs[30], d, sizeof d));
+        uint64_t fp = x->gregs[29];
+        for (int n = 0; n < 32 && fp && !(fp & 7) && readable(fp, 16); n++) {
+            uint64_t next = LD64(fp), lr = LD64(fp + 8);
+            rt_logf("  guest frame %2d: %s\n", n, ldr_describe(lr, d, sizeof d));
+            if (next <= fp || next - fp > (64u << 20)) break;
+            fp = next;
+        }
+        kern_free_cores_note();
+        fflush(stderr);
+        plat_exit(71);
+    }
     for (int i = 0; i < x->nframes; i++) {   // abort and invalid parameter: where the host code called it
         uint64_t g = lifted_function(x->frames[i]);
         rt_logf("  host frame %2d: totk+%#llx", i, (unsigned long long)(x->frames[i] - (rip - x->offset)));

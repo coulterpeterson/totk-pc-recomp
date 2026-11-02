@@ -147,6 +147,9 @@ int plat_intr_stop(PlatIntr *t, uint64_t *rip, uint64_t *rsp) {
     return 1;
 }
 
+void plat_intr_set_inline(void (*fn)(void)) { (void)fn; }   // native execution is AArch64 Linux only
+void plat_crash_guest(int (*is_guest_pc)(uint64_t pc)) { (void)is_guest_pc; }
+
 int plat_intr_resume(PlatIntr *t, uint64_t to) {
     int ok = 1;
     if (to) {

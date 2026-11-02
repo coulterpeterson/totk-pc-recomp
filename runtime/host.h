@@ -141,7 +141,12 @@ uint64_t rt_call(Cpu *c, uint64_t fn, int n, ...);         // host -> guest, sec
 // instructions, rewritten by tools/native/rewrite.py.
 void native_init(void);                                    // the host-function window made executable
 void native_call(Cpu *c);                                  // run guest code at c->pc until it returns to RT_RET_HOST
-void native_add_svc_site(uint64_t ret, uint64_t site, uint32_t imm);   // loader: a rewritten SVC site
+void native_add_gate(uint64_t ret, uint64_t site, uint64_t arg, int spin);   // loader: an SVC (arg) or spin-wait
+                                                                              // site (arg: its loop head)
+void native_add_code(uint64_t lo, uint64_t hi);            // loader: guest code (text, a patch area)
+int native_guest_pc(uint64_t pc);                          // pc in guest code
+void native_add_patch(int set, uint64_t addr, uint32_t orig, uint32_t repl, int page_reg);   // loader: a patch site
+void native_patches_sync(const uint8_t *on, int nsets, uint64_t page);   // patches.c: the sites' words for the sets on
 
 // ---- guest memory (memory.c)
 typedef struct { uint64_t base, size; } RtRange;

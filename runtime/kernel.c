@@ -391,12 +391,24 @@ static int g_ap_log;              // redirects logged so far (AP_LOG_N)
 static uintptr_t g_gen_lo, g_gen_hi;   // host code of the lifted modules: first and last function start
 static uint64_t g_ap_sent, g_ap_taken, g_ap_host, g_ap_pc, g_ap_deferred, g_ap_fail, g_ap_spin_ok;
 void kern_ap_stub(void);
+void kern_ap_yield(void);
 
 static void ap_init(void) {
     if (g_ap >= 0) return;
     const char *e = cfg_value("TOTK_ASYNC_PREEMPT");
     g_ap = strcmp(e, "0") != 0;
     g_ap_int = g_ap && strcmp(e, "2") != 0;
+#ifdef RT_NATIVE
+    // Native execution (native.c): an owner stopped in guest code (native_guest_pc) holds no host lock and has every
+    // register of its own, so it gives the core up inside the interrupt handler (PLAT_INTR_INLINE) and goes on there
+    if (g_ap) {
+        kern_host_track = 1;
+        plat_intr_set_inline(kern_ap_yield);
+    }
+    rt_log("kernel: asynchronous preemption of virtual cores %s, priority inheritance and preemption disable %s; native "
+           "guest code", g_ap_int ? "on" : "off", g_ap ? "on (TOTK_ASYNC_PREEMPT=0 turns all off)" : "off");
+    return;
+#endif
     if (g_ap) {
         RtModule m[16];
         int n = rt_linked_modules(m, 16);
@@ -723,7 +735,11 @@ static int ap_try(RtThread *w) {
     }
     int r = AP_RETRY;
     uint64_t to = 0;
+#ifdef RT_NATIVE
+    if (!native_guest_pc(rip))
+#else
     if (rip < g_gen_lo || rip > g_gen_hi)
+#endif
         g_ap_pc++;
     else if (__atomic_load_n(&o->host_depth, __ATOMIC_RELAXED) > 0)
         g_ap_host++;
@@ -733,7 +749,11 @@ static int ap_try(RtThread *w) {
     } else {
         o->ap_rip = rip;
         o->ap_pending = 1;
+#ifdef RT_NATIVE
+        to = PLAT_INTR_INLINE;
+#else
         to = (uint64_t)(uintptr_t)kern_ap_stub;
+#endif
     }
     if (!plat_intr_resume(o->hthr, to)) {
         o->ap_pending = 0;
@@ -744,8 +764,14 @@ static int ap_try(RtThread *w) {
     }
     if (r == AP_SENT && g_ap_log < AP_LOG_N) {
         g_ap_log++;
+#ifdef RT_NATIVE
+        char at[96];   // a guest pc (native.c)
+        rt_log("kernel: interrupt %#x p%d at %s sp %#llx for %#x p%d", o->handle, o->prio,
+               ldr_describe(o->ap_rip, at, sizeof at), (unsigned long long)rsp, w->handle, w->prio);
+#else
         rt_log("kernel: interrupt %#x p%d at exe+%#llx rsp %#llx for %#x p%d", o->handle, o->prio,
                (unsigned long long)(o->ap_rip - plat_exe_base()), (unsigned long long)rsp, w->handle, w->prio);
+#endif
     }
     return r;
 }

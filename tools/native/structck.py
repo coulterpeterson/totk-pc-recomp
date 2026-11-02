@@ -78,7 +78,7 @@ def sysk(t):
     return None
 
 # ---- sites.tsv ----
-sites = {}; wins = []; jumps = 0; calls = {}
+sites = {}; wins = []; jumps = 0; calls = {}; spinhead = {}
 for l in open(f'{out_dir}/{mod}.sites.tsv'):
     f = l.split(); a = int(f[0], 16)
     if f[1] == 'J': jumps += 1; continue
@@ -87,6 +87,7 @@ for l in open(f'{out_dir}/{mod}.sites.tsv'):
         end = int(f[2], 16)
         if end != a + 8: bad(f'call window must have two words {a:#x}')
         calls[a] = end - 4; wins.append((a, end)); sites[a] = 'C'
+    elif f[1] == 'spin': sites[a] = 'spin'; spinhead[a] = int(f[2], 16)   # Android: spin-wait back-edges
     else: sites[a] = f[1]
 inwin = set(o for lo, hi in wins for o in range(lo, hi, 4))
 atomic_groups = nsoimg.exclusive_groups(orig, [(lo, hi) for lo, hi in wins if lo not in calls])
@@ -234,9 +235,11 @@ for o, t in D.items():
     if k: ind[o] = k
 miss = sorted(o for o in ind if o not in sites and o not in inwin)
 if miss: bad(f'独立反汇编有、改写点没覆盖：{len(miss)} 例 {[(hex(x), D[x]) for x in miss[:5]]}')
-extra = sorted(a for a, k in sites.items() if k not in ('W', 'C') and a not in ind and a not in _hostcall)
+extra = sorted(a for a, k in sites.items() if k not in ('W', 'C', 'spin') and a not in ind and a not in _hostcall)
 if extra: bad(f'改写点不在独立集合里：{len(extra)} 例 {[(hex(x), D.get(x)) for x in extra[:5]]}')
-kmis = sorted(a for a, k in sites.items() if k not in ('W', 'C') and a in ind and ind[a] != k)
+kmis = sorted(a for a, k in sites.items() if k not in ('W', 'C', 'spin') and a in ind and ind[a] != k)
+spin_x = sorted(a for a in spinhead if a in ind)
+if spin_x: bad(f'spin back-edge on an x18 / system register site: {[hex(x) for x in spin_x[:5]]}')
 if kmis: bad(f'改写点种类与独立判读不同：{len(kmis)} 例 {[(hex(x), sites[x], D[x]) for x in kmis[:5]]}')
 nwin_ref = sum(1 for o in ind if o in inwin)
 
@@ -328,6 +331,28 @@ for a in gsites:
     g = gates.get(ks[0] + 12)
     if g != (sites[a], arg, a): bad(f'gates.tsv 不符 {a:#x}：表 {g} 期望 {(sites[a], arg, a)}')
     seen.add(ks[0] + 12)
+# Android: spin-wait blocks. A conditional back-edge is first re-encoded to the gate two words on, then b back after
+# the site; the gate block is the SVC gate's template and ends with b to the loop head.
+for a, head in spinhead.items():
+    s_ = btarget(a); ow = W(orig, a)
+    if s_ is None or not PO <= s_ < len(pat): bad(f'spin back-edge {a:#x} does not branch to the patch area'); continue
+    first = next(_md.disasm(orig[a:a + 4], a), None)
+    if not first or first.operands[-1].imm != head: bad(f'spin back-edge {a:#x} is no branch to {head:#x}'); continue
+    g_ = s_
+    if first.mnemonic != 'b':
+        q = next(_md.disasm(pat[s_:s_ + 4], s_), None)
+        keep = 0xFFF8001F if first.mnemonic in ('tbz', 'tbnz') else 0xFF00001F   # all but the branch offset
+        if not q or q.mnemonic != first.mnemonic or W(pat, s_) & keep != ow & keep \
+                or q.operands[-1].imm != s_ + 8 or btarget(s_ + 4) != a + 4:
+            bad(f'spin block {a:#x}: condition not kept'); continue
+        g_ = s_ + 8
+    ks = keyseq(g_ + 4)
+    if W(pat, g_) != 0xA9BF7BFD or not ks or ks[1] != KEY.get('KGATE') \
+            or W(pat, ks[0]) & 0xFFC00000 != 0xF9400000 or W(pat, ks[0] + 4) != LDR_X29_SP or W(pat, ks[0] + 8) != 0xD63F03C0 \
+            or W(pat, ks[0] + 12) != 0xA8C17BFD or W(pat, ks[0] + 16) != B(ks[0] + 16, head):
+        bad(f'spin block {a:#x} does not match the gate template'); continue
+    if gates.get(ks[0] + 12) != ('spin', head, a): bad(f'gates.tsv does not list spin block {a:#x}')
+    seen.add(ks[0] + 12)
 # ⑦ 观测门
 # ⑦ Observation gates
 import bisect as _bs
@@ -396,7 +421,7 @@ expected = {}
 for kind in sites.values():
     key = {'x18': 'K18', 'W': 'K18', 'C': 'K18', 'tpidr_r': 'KTLS', 'tpidr_w': 'KTLS', 'tpidrro_r': 'KTLR'}.get(kind)
     if key: expected[key] = expected.get(key, 0) + 1
-expected['KGATE'] = len(gsites) + len(obs) + nbranch
+expected['KGATE'] = len(gsites) + len(obs) + nbranch + len(spinhead)
 for _, _, _, key in params: expected[key] = expected.get(key, 0) + 1
 if any(nk.get(k, 0) != v for k, v in expected.items()) or any(k not in expected and v for k, v in nk.items()):
     bad(f'键页槽访问计数不符：期望 {expected} 实际 {nk}')

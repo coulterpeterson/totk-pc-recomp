@@ -2,8 +2,11 @@
 
 Runs tools/native/patch_nso.py on main, subsdk0 and sdk, which writes each module's patched image (image, bss, key page
 and patch area) and its site tables into the output folder, then lays the modules out with room for their patch areas
-(recomp/layout.py, sizes from the patched images) and writes layout.json and layout.h there. --verify runs the
-structure checker (structck.py) and the per-site equivalence checker against Unicorn (equiv.py) on every module.
+(recomp/layout.py, sizes from the patched images) and writes layout.json and layout.h there. The version's patch file
+(recomp/patches-<version>.txt) gives the spin waits, which the rewrite sends through the SVC gate (rt_spin_gate), and
+the patch sets' sites, written to patchsites.tsv for the loader, which sets their words while the sets are on
+(runtime/native.c). --verify runs the structure checker (structck.py) and the per-site equivalence checker against
+Unicorn (equiv.py) on every module.
 
 Usage: .venv/bin/python tools/native/rewrite.py --version v0 [--verify] [--jobs N]
 Output: build/<version>-native/ (game-derived, ignored by Git).
@@ -19,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'recomp'))
 from layout import FIRST_BASES, layout, write  # noqa: E402
+import patches  # noqa: E402
 
 MODULES = ('main', 'subsdk0', 'sdk')
 KERNEL_OFFSET = 0x10000000   # runtime/host.h RT_KERNEL_BASE: the guest kernel region starts this far above the modules
@@ -57,7 +61,18 @@ def main():
     exefs = Path(a.exefs or ROOT / 'build' / 'extracted' / a.version / 'exefs')
     out = Path(a.out or ROOT / 'build' / f'{a.version}-native')
     out.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, DM_RULESET='native', DM_PRIVATE_GATES='0')
+    table = patches.load(ROOT / 'recomp' / f'patches-{a.version}.txt', layout(exefs, 'android'))
+    spins = out / 'spins.tsv'
+    spins.write_text(''.join(f'{m} {b:x} {h:x}\n' for m, edges in table.spins.items() for b, h in sorted(edges.items())))
+    rows = []
+    for m, sites in table.sites.items():
+        for off, alts in sorted(sites.items()):
+            for k, repl, orig in alts:
+                if len(repl) != 1:
+                    raise SystemExit(f'{m}+{off:#x}: a patch site of {len(repl)} words; native execution patches one')
+                w = repl[0]
+                rows.append(f'{k}\t{m}\t{off:x}\t{orig:08x}\t' + (f'page:x{w[1]}' if isinstance(w, tuple) else f'{w:08x}'))
+    env = dict(os.environ, DM_RULESET='native', DM_PRIVATE_GATES='0', DM_SPINS=str(spins))
     py = sys.executable
 
     for m in MODULES:
@@ -67,6 +82,14 @@ def main():
         ''.join(f'{hashlib.sha256((HERE / f).read_bytes()).hexdigest()}  {f}\n'
                 for f in ('patch_nso.py', 'call_window.py', 'relr.py')))
 
+    for m in MODULES:   # a patch site must still hold its original word: the rewrite may not have moved it
+        rewritten = {int(l.split()[0], 16) for l in (out / f'{m}.sites.tsv').read_text().splitlines() if l.split()[1] != 'J'}
+        clash = sorted(off for off in table.sites.get(m, {}) if off in rewritten)
+        if clash:
+            raise SystemExit(f'{m}: patch sites {[hex(x) for x in clash]} are rewrite sites')
+    (out / 'patchsites.tsv').write_text(
+        f'# set\tmodule\toffset\toriginal\treplacement (page:x<n> = adrp x<n>, the patch page)\n' +
+        ''.join(r + '\n' for r in rows))
     sizes = {m: (out / f'{m}.patched.bin').stat().st_size for m in MODULES}
     mods = layout(exefs, 'android', sizes)
     end = max(b + s for _, b, s in mods)

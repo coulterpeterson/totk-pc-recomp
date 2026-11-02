@@ -762,6 +762,44 @@ for a in sorted(kinds):
     elif k == 'cntvct': stat(k); continue   # Android: runs as it is
     put_branch(a, st)
 
+# Android (this repository): spin waits, recomp/patches.py `spin` lines (tools/native/rewrite.py passes them in DM_SPINS
+# as "<module> <back-edge> <head>"). Each back-edge, a direct branch to the loop head, goes to a block that takes the
+# branch as the original would and calls the gate (kind spin, the head as argument) on the way back to the head, where
+# the runtime calls rt_spin_gate as the lifted code does; the fall-through leaves the block unchanged.
+SPIN_HEADS = {}
+if os.environ.get('DM_SPINS'):
+    for l in open(os.environ['DM_SPINS']):
+        m_, b_, h_ = l.split()
+        if m_ == NAME: SPIN_HEADS[int(b_, 16)] = int(h_, 16)
+
+def site_spin(ins, head):
+    w = struct.unpack('<I', ins.bytes)[0]
+    m = ins.mnemonic
+    start = here()
+    if m != 'b':   # conditional: taken goes to the gate below, not taken back after the site
+        if m.startswith('b.') or m in ('cbz', 'cbnz'): nw = (w & 0xFF00001F) | (2 << 5)
+        else: nw = (w & 0xFFF8001F) | (2 << 5)
+        pc = here(); emit(nw)
+        dd = dis(nw, pc); assert dd.mnemonic == m and dd.operands[-1].imm == pc + 8, f'spin branch {ins.address:x}'
+        emit(B(here(), ins.address + 4))
+    emit(STP_PRE(29, 30, 31, -16))
+    emit_gate_call()
+    emit(BLR(30))
+    ret = here()
+    emit(LDP_POST(29, 30, 31, 16))
+    emit(B(here(), head))
+    gates.append((ret, 'spin', head, ins.address))
+    return start
+
+spin_sites = {}
+for a, head in sorted(SPIN_HEADS.items()):
+    assert a < TEXT_END and a not in kinds and a not in done, f'spin back-edge {a:x} is a rewrite site'
+    assert not any(seg[0].address <= a < seg[-1].address + 4 for seg in windows), f'spin back-edge {a:x} in a window'
+    ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
+    assert ins.mnemonic in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'), f'spin {a:x}: {ins.mnemonic}'
+    assert ins.operands[-1].imm == head, f'spin back-edge {a:x} does not branch to {head:x}'
+    put_branch(a, site_spin(ins, head)); stat('spin'); spin_sites[a] = head
+
 # 私有视觉分支；非OBS，0x85只读查询。只有本实验构建显式opt-in；原Qty/children和Update不变。
 # Private visual branch; not OBS, 0x85 is a read-only query. Only this experimental build explicitly opts in; the original Qty/children and Update are unchanged.
 if RULE_RUN and PRIVATE_GATES:
@@ -1020,6 +1058,7 @@ with open(P('sites.tsv'), 'w') as f:
         if a not in done: f.write(f'{a:#x}\t{kinds[a][0]}\n')
     for wseg in windows: f.write(f'{wseg[0].address:#x}\tW\t{wseg[-1].address + 4:#x}\n')
     for prefix, (call, _) in sorted(calls.items()): f.write(f'{prefix:#x}\tC\t{call + 4:#x}\n')
+    for a, head in sorted(spin_sites.items()): f.write(f'{a:#x}\tspin\t{head:#x}\n')   # Android: spin waits
     for a, (b, c) in jumps.items(): f.write(f'{a:#x}\tJ\t{b:#x}\t{c}\n')
 with open(P('cuts.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')

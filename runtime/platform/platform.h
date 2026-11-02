@@ -54,6 +54,11 @@ uint64_t plat_intr_fp(PlatIntr *t);   // between a stop and its resume: the fram
 // Lets a stopped t go on: at to when to is nonzero, else where it stopped. 0 when the redirection failed (t then goes
 // on where it stopped).
 int plat_intr_resume(PlatIntr *t, uint64_t to);
+// to = PLAT_INTR_INLINE (Linux): the stopped thread runs the function plat_intr_set_inline named, inside its signal
+// handler on its signal stack, and returns to where it stopped with every register as it was (native execution's
+// asynchronous preemption, kernel.c ap_try: the thread runs guest code then and holds no host lock).
+#define PLAT_INTR_INLINE 1ull
+void plat_intr_set_inline(void (*fn)(void));
 
 // Fibers: execution contexts with stacks of their own that threads switch between; a fiber may resume on another
 // thread. Each switch keeps the callee-saved registers and the floating-point control state.
@@ -241,6 +246,7 @@ _Noreturn void plat_reexec(void);
 // OS. The write-fault hook above runs first. On Windows abort() (a failed assert, std::terminate) and an invalid
 // parameter to a C runtime function go there too, with the host frames in this executable: the C runtime ends the
 // process for both with 0xc0000409 and no exception.
+void plat_crash_guest(int (*is_guest_pc)(uint64_t pc));   // native execution: faults there are reported as well
 typedef struct {
     const char *what;          // "access violation", "illegal instruction", ...
     uint32_t code;             // the Windows exception code or the signal number
@@ -249,6 +255,8 @@ typedef struct {
     uint64_t addr;             // its address when access >= 0
     int nframes;               // abort and invalid parameter: return addresses in this executable, innermost first
     uintptr_t frames[16];      // (rip is frames[0]); 0 for a fault, whose rip is exact
+    int guest;                 // AArch64 Linux, native execution: the fault is in guest code (plat_crash_guest)
+    uint64_t gregs[32];        // then x0-x30 and sp (gregs[31]) at the fault
 } PlatCrash;
 void plat_crash_hook(void (*fn)(const PlatCrash *c));
 int plat_mem_read(uint64_t addr, void *out, size_t n);    // copies n bytes, 0 instead of faulting on unmapped memory

@@ -88,8 +88,20 @@ must check the slot is still empty when it creates each guest thread.
    performance mode, about what the lifted build reaches there: the critical path still has 26 ms of running a frame,
    and the main thread uses about 9 ms of CPU a frame. Spin waits run without their gates and asynchronous
    preemption is off, which milestone 3 adds.
-3. **Play.** Spin gates, async preemption, alternate stacks, crash reports; the save loads and plays outdoors for
-   30 minutes without a stop; `hang_report` works on native threads.
+3. **Play** (done, 2026-11-02).
+   - Spin waits: the rewrite sends the back-edge of each of the 881 spin waits in `recomp/patches-v0.txt` through the
+     SVC gate (`tools/native/patch_nso.py` `site_spin`, checked by `structck.py`), and the runtime runs
+     `rt_spin_gate` there, as for lifted code.
+   - Patch sets: the 25 one-word sites (`patchsites.tsv`) are written into the code while their set is on, also when
+     a set switches during play (`native.c` `native_patches_sync`, from `patches.c`).
+   - Asynchronous preemption: an owner stopped in guest code gives its core up inside the interrupt handler, on its
+     signal stack, and returns to where it stopped with its registers untouched (`PLAT_INTR_INLINE`); priority
+     inheritance and Horizon's preemption disable are on again (they were off with no lifted code).
+   - Crashes in guest code are reported with the guest pc, registers and frame chain (`plat_crash_guest`).
+   - On the Thor, 30 minutes outdoors on the save (scripted input, the Android profile's 30 fps): no stop, no hang,
+     29.3 fps over the second half (1% lows 19-23 fps), memory mappings level at about 35,000 of 65,530, and 101,615
+     preemptions taken in guest code. Textures are re-uploaded 22 times per 60 frames (2.4 MiB), where the lifted
+     build with placed pools has none: to look at in milestone 4.
 4. **Measure.** The same four-minute runs and critical-path recordings as the lifted build, in both power modes.
 
 ## What to expect

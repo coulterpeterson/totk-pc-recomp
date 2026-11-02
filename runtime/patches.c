@@ -53,6 +53,16 @@ void rt_patches_init(void) {
         if (n >= sizeof list) n = sizeof list - 1;
     }
     rt_log("patches: %s (page %#llx)", list, RT_PATCH_PAGE);
+#ifdef RT_NATIVE
+    native_patches_sync(rt_patch_on, RT_PATCH_COUNT, RT_PATCH_PAGE);   // native code holds the sites' words itself
+#endif
+#endif
+}
+
+// Native execution (native.c): after a set changes, the sites' words follow it.
+static void sync_code(void) {
+#if defined(RT_NATIVE) && RT_PATCH_COUNT
+    native_patches_sync(rt_patch_on, RT_PATCH_COUNT, RT_PATCH_PAGE);
 #endif
 }
 
@@ -69,10 +79,12 @@ int rt_patch_enabled(int set) { return set >= 0 && set < RT_PATCH_COUNT && rt_pa
 
 void rt_patch_disable(int set) {
     if (set >= 0 && set < RT_PATCH_COUNT) rt_patch_on[set] = 0;
+    sync_code();
 }
 
 void rt_patch_switch(int set, int on) {
     if (set >= 0 && set < RT_PATCH_COUNT) __atomic_store_n(&rt_patch_on[set], (uint8_t)(on != 0), __ATOMIC_RELAXED);
+    sync_code();
 }
 
 void *rt_patch_page(void) {

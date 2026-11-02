@@ -15,10 +15,14 @@
 //   the host stack below native_run's frame, loads the registers back and returns to x30.
 // - native_svc_gate: a rewritten SVC site called c->gate (patch_nso.py site_gate: x30 is the return into the site's
 //   block, x29 the guest's). Same as a host function, with rt_svc and the SVC number of that site (sdk.gates.tsv).
+//   A spin wait's back-edge calls the same gate (patch_nso.py site_spin), which then runs rt_spin_gate.
+// Also here: the patch sets' sites (patches.c), whose words are written into the code while their set is on, and the
+// guest code ranges asynchronous preemption may interrupt (kernel.c ap_try).
 // x16 and x17 are the intra-procedure-call scratch registers: the host-function slots and the return sentinel use
 // them, as a veneer would. Guest code never writes the hardware x18, so bionic's shadow call stack stays intact.
 #include <stddef.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -117,18 +121,19 @@ __asm__(
     "  LOAD_GUEST\n  ldr x17, [x16, #136]\n  ldr x16, [x16, #128]\n  ret\n"
     ".size native_svc_gate, .-native_svc_gate\n");
 
-// ---- SVC sites: the return address of each site's block (gates.tsv) -> its SVC number and the original site
-typedef struct { uint64_t ret, site; uint32_t imm; } SvcSite;
+// ---- gate sites: the return address of each site's block (gates.tsv) -> what to run there and the original site: an
+// SVC number, or a spin wait's loop head
+typedef struct { uint64_t ret, site, arg; int spin; } SvcSite;
 static SvcSite *svc_sites;
 static int nsvc, capsvc;
 
-void native_add_svc_site(uint64_t ret, uint64_t site, uint32_t imm) {
+void native_add_gate(uint64_t ret, uint64_t site, uint64_t arg, int spin) {
     if (nsvc == capsvc) {
-        capsvc = capsvc ? 2 * capsvc : 256;
+        capsvc = capsvc ? 2 * capsvc : 1024;
         svc_sites = realloc(svc_sites, (size_t)capsvc * sizeof *svc_sites);
-        if (!svc_sites) rt_fatal("native: SVC site table allocation");
+        if (!svc_sites) rt_fatal("native: gate site table allocation");
     }
-    svc_sites[nsvc++] = (SvcSite){ret, site, imm};
+    svc_sites[nsvc++] = (SvcSite){ret, site, arg, spin};
 }
 
 static int by_ret(const void *a, const void *b) {
@@ -142,7 +147,8 @@ void native_svc_c(Cpu *c, uint64_t ret) {
         int mid = (lo + hi) / 2;
         if (svc_sites[mid].ret == ret) {
             c->pc = svc_sites[mid].site;
-            rt_svc(c, svc_sites[mid].imm, svc_sites[mid].site);
+            if (svc_sites[mid].spin) rt_spin_gate(c, svc_sites[mid].arg);
+            else rt_svc(c, (uint32_t)svc_sites[mid].arg, svc_sites[mid].site);
             return;
         }
         if (svc_sites[mid].ret < ret) lo = mid + 1;
@@ -187,9 +193,79 @@ void native_init(void) {
     far_jump(&w[(RT_RET_HOST - base) / 4], native_return);
     far_jump(&w[(common - base) / 4], native_hostfn_gate);
     __builtin___clear_cache((char *)w, (char *)w + RT_HOSTFN_SIZE);
+    plat_crash_guest(native_guest_pc);
     if (!plat_mem_protect(base, RT_HOSTFN_SIZE, PLAT_PROT_RX)) rt_fatal("native: cannot make the host-function window executable");
     qsort(svc_sites, (size_t)nsvc, sizeof *svc_sites, by_ret);
-    rt_log("native: guest code runs natively; %d SVC sites, host functions at %#llx", nsvc, (unsigned long long)base);
+    int spins = 0;
+    for (int i = 0; i < nsvc; i++) spins += svc_sites[i].spin;
+    rt_log("native: guest code runs natively; %d SVC sites, %d spin waits, host functions at %#llx", nsvc - spins, spins,
+           (unsigned long long)base);
+}
+
+// ---- guest code: the modules' text and patch areas (loader.c), where asynchronous preemption may stop a thread
+static struct { uint64_t lo, hi; } code[16];
+static int ncode;
+
+void native_add_code(uint64_t lo, uint64_t hi) {
+    if (ncode == 16) rt_fatal("native: more than 16 code ranges");
+    code[ncode].lo = lo;
+    code[ncode++].hi = hi;
+}
+
+int native_guest_pc(uint64_t pc) {
+    for (int i = 0; i < ncode; i++)
+        if (pc >= code[i].lo && pc < code[i].hi) return 1;
+    return 0;
+}
+
+// ---- patch sets (patches.c): a site's word is the replacement of the first set in file order that is on, else the
+// original. Written with the page briefly writable and executable, so a thread running nearby keeps running.
+typedef struct { uint64_t addr; uint32_t orig, repl; int set, page_reg; } PatchSite;
+static PatchSite *psites;
+static int npatch, cappatch;
+static PlatMutex patch_lock = PLAT_MUTEX_INIT;
+
+void native_add_patch(int set, uint64_t addr, uint32_t orig, uint32_t repl, int page_reg) {
+    if (npatch == cappatch) {
+        cappatch = cappatch ? 2 * cappatch : 64;
+        psites = realloc(psites, (size_t)cappatch * sizeof *psites);
+        if (!psites) rt_fatal("native: patch site table allocation");
+    }
+    psites[npatch++] = (PatchSite){addr, orig, repl, set, page_reg};
+}
+
+static uint32_t adrp_to(uint64_t pc, uint64_t target, int rd) {
+    int64_t imm = (int64_t)(target >> 12) - (int64_t)(pc >> 12);
+    uint32_t u = (uint32_t)imm & 0x1FFFFF;
+    return 0x90000000u | (u & 3) << 29 | (u >> 2) << 5 | (uint32_t)rd;
+}
+
+void native_patches_sync(const uint8_t *on, int nsets, uint64_t page) {
+    plat_mutex_lock(&patch_lock);
+    int changed = 0;
+    for (int i = 0; i < npatch; i++) {
+        PatchSite *p = &psites[i];
+        int first = 1;   // the first row of this address decides
+        for (int j = 0; j < i; j++) first &= psites[j].addr != p->addr;
+        if (!first) continue;
+        uint32_t want = p->orig;
+        for (int j = i; j < npatch; j++)
+            if (psites[j].addr == p->addr && psites[j].set < nsets && on[psites[j].set]) {
+                want = psites[j].page_reg >= 0 ? adrp_to(p->addr, page, psites[j].page_reg) : psites[j].repl;
+                break;
+            }
+        uint32_t *w = (uint32_t *)(uintptr_t)p->addr;
+        if (*w == want) continue;
+        uint64_t pg = p->addr & ~0xFFFull;
+        if (mprotect((void *)(uintptr_t)pg, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC))
+            rt_fatal("native: cannot open the code page %#llx for a patch", (unsigned long long)pg);
+        __atomic_store_n(w, want, __ATOMIC_RELEASE);
+        __builtin___clear_cache((char *)w, (char *)(w + 1));
+        if (!plat_mem_protect(pg, 0x1000, PLAT_PROT_RX)) rt_fatal("native: cannot seal the code page %#llx", (unsigned long long)pg);
+        changed++;
+    }
+    plat_mutex_unlock(&patch_lock);
+    if (changed) rt_log("native: %d patch site words written", changed);
 }
 
 #define TLS_SLOT_APP 2   // bionic: available to apps (tools/native/README.md)

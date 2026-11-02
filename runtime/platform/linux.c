@@ -198,6 +198,9 @@ struct PlatIntr {
 
 static __thread PlatIntr *intr_me;
 static int intr_sig;
+static void (*intr_inline)(void);
+
+void plat_intr_set_inline(void (*fn)(void)) { intr_inline = fn; }
 
 static void intr_handler(int sig, siginfo_t *si, void *uc) {
     (void)sig, (void)si;
@@ -216,6 +219,11 @@ static void intr_handler(int sig, siginfo_t *si, void *uc) {
     int32_t req = INTR_REQ;
     if (!__atomic_compare_exchange_n(&t->state, &req, INTR_STOPPED, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
     while (__atomic_load_n(&t->state, __ATOMIC_ACQUIRE) != INTR_GO) plat_pause();
+    if (t->to == PLAT_INTR_INLINE) {   // free for the next stop first: the function may wait a while
+        __atomic_store_n(&t->state, INTR_IDLE, __ATOMIC_RELEASE);
+        if (intr_inline) intr_inline();
+        return;
+    }
 #if defined(__x86_64__)
     if (t->to) u->uc_mcontext.gregs[REG_RIP] = (greg_t)t->to;
 #elif defined(__aarch64__)
@@ -1209,6 +1217,8 @@ static int fault_access(const ucontext_t *u) {
 #endif
 }
 
+static int (*crash_guest)(uint64_t pc);
+
 static void fault_handler(int sig, siginfo_t *si, void *uc) {
     ucontext_t *u = uc;
     int access = fault_access(u);
@@ -1220,12 +1230,21 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
     uintptr_t rip = (uintptr_t)u->uc_mcontext.pc;
 #endif
     Dl_info at, self;
-    if (crash_fn && dladdr((void *)rip, &at) && dladdr((void *)plat_crash_hook, &self) && at.dli_fbase == self.dli_fbase) {
+    int guest = crash_guest && crash_guest(rip);
+    if (crash_fn && dladdr((void *)plat_crash_hook, &self) &&
+        (guest || (dladdr((void *)rip, &at) && at.dli_fbase == self.dli_fbase))) {
         PlatCrash c = {sig == SIGSEGV ? "access violation" : sig == SIGBUS ? "bus error"
                        : sig == SIGILL ? "illegal instruction" : "arithmetic exception",
-                       (uint32_t)sig, rip, rip - (uintptr_t)self.dli_fbase, -1, 0};
+                       (uint32_t)sig, rip, guest ? 0 : rip - (uintptr_t)self.dli_fbase, -1, 0};
         if (sig == SIGSEGV || sig == SIGBUS)
             c.access = access, c.addr = (uint64_t)(uintptr_t)si->si_addr;
+#if defined(__aarch64__)
+        if (guest) {
+            c.guest = 1;
+            for (int i = 0; i < 31; i++) c.gregs[i] = u->uc_mcontext.regs[i];
+            c.gregs[31] = u->uc_mcontext.sp;
+        }
+#endif
         crash_fn(&c);
     }
     signal(sig, SIG_DFL);   // returns into the faulting instruction, which faults again with the default action
@@ -1248,6 +1267,8 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
     fault_hook = fn;
     fault_install();
 }
+
+void plat_crash_guest(int (*is_guest_pc)(uint64_t pc)) { crash_guest = is_guest_pc; }
 
 void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
     crash_fn = fn;
