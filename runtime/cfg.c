@@ -153,7 +153,7 @@ static const CfgMeta metas[] = {
     {"LIB_PREBUILD", "1", "0|1", RESTART}, {"LIB_PREBUILD_THREADS", "", "1..64", RESTART},
     {"PIPE_PREBUILD", "1", "0|1", RESTART}, {"PREWARM_XLATE", "", "1..64", RESTART}, {"GPL", "", "0|1", RESTART},
     // textures and memory
-    {"ASTC", "auto", "auto|gpu|native|cpu", RESTART}, {"GPU_TIME", "completion", "completion|record", RESTART}, {"PLACED", "1", "0|1", RESTART}, {"MEMORY", "auto", "auto|import|mirror|verify", RESTART},
+    {"ASTC", "auto", "auto|gpu|native|cpu", RESTART}, {"GPU_TIME", "completion", "completion|record", RESTART}, {"PLACED", "0", "0|1", RESTART}, {"MEMORY", "auto", "auto|import|mirror|verify", RESTART},
     {"TEX_ALIAS", "1", "0|1", RESTART}, {"TEX_VRAM_PRESSURE", "90", "0..100", RESTART}, {"ASTC_BC", "0", "0|1", RESTART}, {"ZSTD_NATIVE", "1", "0|1", RESTART}, {"ZSTD_CHECK", "0", "0|1", RESTART},
     // render fixes
     {"LOD_GUARD", "1", "0|1", RESTART}, {"FIX_C0", "1", "0|1", RESTART}, {"FIX_ZERO", "1", "0|1", RESTART},

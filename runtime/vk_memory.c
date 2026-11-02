@@ -114,23 +114,24 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
 // straight to memory the GPU reads, as with an import, with no shadow copy before each submission. The guest's bytes
 // are copied over at the switch; when the pool goes, the range gets ordinary memory and its bytes back. The memory
 // is coherent and CPU-cached (the guest reads it as its own); a device without such a type, a range not aligned for
-// a placed mapping, or a failed mapping leaves the pool to shadow storage. TOTK_PLACED=0 turns it off.
-// Measured on the AYN Thor (Turnip): shadow storage cost the presenting thread about a fifth of its replay time in
-// write-watch queries, re-protection and copies, and the game's threads a fault per first write to a pool page.
+// a placed mapping, or a failed mapping leaves the pool to shadow storage. Off unless TOTK_PLACED=1: on the AYN Thor
+// (Turnip) the game stopped a few seconds into play with it, every thread waiting and the GPU's writes to CPU-visible
+// memory no longer completing; the cause is not found yet. Shadow storage cost the presenting thread there about a
+// fifth of its replay time in write-watch queries, re-protection and copies, and the game's threads a fault per first
+// write to a pool page.
 static int placed_on;
 static PFN_vkMapMemory2KHR p_map2;
 static PFN_vkUnmapMemory2KHR p_unmap2;
 
 void vk_mem_set_placed(const VkCtx *c) {
-    const char *e = cfg_get("TOTK_PLACED");
-    placed_on = c->has_map_placed && !(e && !strcmp(e, "0"));
+    placed_on = c->has_map_placed && !strcmp(cfg_value("TOTK_PLACED"), "1");
     if (placed_on) {
         p_map2 = (PFN_vkMapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkMapMemory2KHR");
         p_unmap2 = (PFN_vkUnmapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkUnmapMemory2KHR");
         placed_on = p_map2 && p_unmap2;
     }
     if (placed_on) rt_log("mem: CPU-visible pools are device memory mapped over the guest's pages (VK_EXT_map_memory_placed, "
-                          "alignment %#llx; TOTK_PLACED=0: shadow storage)", (unsigned long long)c->min_placed_alignment);
+                          "alignment %#llx; TOTK_PLACED=1, experimental)", (unsigned long long)c->min_placed_alignment);
 }
 
 static int cached_coherent_type(const VkCtx *c, uint32_t bits) {
