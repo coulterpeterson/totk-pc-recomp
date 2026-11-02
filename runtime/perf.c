@@ -253,6 +253,12 @@ static void cpu_placement(void) {
     }
     int on = RT_KNOB_ON(mode);
     if (on == applied) return;
+    // Off and never on: the affinity stays the OS's. Writing `all` there gave every thread the mask of the thread that
+    // presents first, which on the AYN Thor (Android 13) holds CPUs 0-5 only: the whole game lost the X3 and an A710.
+    if (!on && applied < 0) {
+        applied = 0;
+        return;
+    }
     applied = on;
     plat_process_affinity(on ? one : all);
 }

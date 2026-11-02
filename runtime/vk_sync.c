@@ -243,6 +243,39 @@ WEAK int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint
     return 0;
 }
 
+// ---- TOTK_TRACE=perf: where a submission's time goes between the game's submit and its completion (queued for the
+// replay, replayed, on the GPU after its last part was submitted), and how far behind the newest submission the fences
+// threads wait for are. One line every PL_LOG completed submissions.
+#define PL_N 4096
+#define PL_LOG 512
+static struct { uint64_t enq, rep0, sub; } pl[PL_N];   // by value % PL_N
+static uint64_t pl_q, pl_r, pl_g, pl_n, pl_waits, pl_wait_ns, pl_lag[4];
+static int pl_on = -1;
+static int pl_enabled(void) {
+    if (pl_on < 0) pl_on = (rt_trace & RT_TRACE_PERF) != 0;
+    return pl_on;
+}
+
+static void pl_done(uint64_t from, uint64_t to) {   // st_lock held: values from+1..to completed now
+    uint64_t now = kern_now_ns();
+    for (uint64_t v = from + 1; v <= to; v++) {
+        typeof(pl[0]) *e = &pl[v % PL_N];
+        if (e->sub && e->rep0 && e->enq && e->rep0 >= e->enq && e->sub >= e->rep0 && now >= e->sub) {
+            pl_q += e->rep0 - e->enq, pl_r += e->sub - e->rep0, pl_g += now - e->sub, pl_n++;
+        }
+        e->enq = e->rep0 = e->sub = 0;
+    }
+    if (pl_n >= PL_LOG) {
+        rt_log("vk: pipeline per submission (%llu): queued %.2f ms, replayed %.2f ms, GPU after its last part %.2f ms; "
+               "fence waits %llu, avg %.2f ms, submissions behind the newest 0/1/2/3+: %llu/%llu/%llu/%llu",
+               (unsigned long long)pl_n, pl_q / 1e6 / pl_n, pl_r / 1e6 / pl_n, pl_g / 1e6 / pl_n,
+               (unsigned long long)pl_waits, pl_waits ? pl_wait_ns / 1e6 / pl_waits : 0.0, (unsigned long long)pl_lag[0],
+               (unsigned long long)pl_lag[1], (unsigned long long)pl_lag[2], (unsigned long long)pl_lag[3]);
+        pl_q = pl_r = pl_g = pl_n = pl_waits = pl_wait_ns = 0;
+        memset(pl_lag, 0, sizeof pl_lag);
+    }
+}
+
 static void completion_main(void *arg) {
     VkCtx *c = arg;
     plat_mutex_lock(&st_lock);
@@ -276,6 +309,7 @@ static void completion_main(void *arg) {
             plat_mutex_unlock(&st_lock);
             vk_mem_collect();
             plat_mutex_lock(&st_lock);
+            if (pl_enabled()) pl_done(done, reached);
             __atomic_store_n(&done, reached, __ATOMIC_RELEASE);
             plat_cond_broadcast(&cv_done);
         }
@@ -399,6 +433,7 @@ uint64_t vk_sync_reserve(void) {
     plat_mutex_lock(&st_lock);
     if (reserved < issued) reserved = issued;
     uint64_t v = ++reserved;
+    if (pl_enabled()) pl[v % PL_N].enq = kern_now_ns();
     plat_mutex_unlock(&st_lock);
     return v;
 }
@@ -410,6 +445,10 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
     vk_mem_dirty_submit();   // TOTK_TRACE=perf: what a mirror would upload before this submit
     uint64_t fence = __atomic_load_n(&issued, __ATOMIC_ACQUIRE) + 1;
     cur_fence = fence;
+    if (pl_enabled()) {
+        pl[fence % PL_N].rep0 = kern_now_ns();
+        if (!pl[fence % PL_N].enq) pl[fence % PL_N].enq = pl[fence % PL_N].rep0;   // synchronous replay: no queue
+    }
     CmdSlot *s = take_slot(c, fence);
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -445,6 +484,7 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
         vk_device_fault_report(r);
         rt_fatal("vk: vkQueueSubmit2 of value %llu failed (%d)", (unsigned long long)fence, (int)r);
     }
+    if (pl_enabled()) pl[fence % PL_N].sub = kern_now_ns();
     s->fence = recorded ? fence : 0;
     vk_mem_note_submit(fence);
     plat_mutex_lock(&st_lock);
@@ -495,6 +535,11 @@ static int fence_wait_impl(uint64_t value, uint64_t timeout_ns) {
         ok = 0;   // never submitted nor queued: never reached (as in the null back end)
     } else {
         uint64_t t0 = kern_now_ns();
+        if (done < value && pl_enabled()) {
+            uint64_t newest = issued > reserved ? issued : reserved, lag = newest - value;
+            pl_lag[lag > 3 ? 3 : lag]++;
+            pl_waits++;
+        }
         while (done < value) {
             if (timeout_ns < (1ull << 62)) {
                 uint64_t el = kern_now_ns() - t0;
@@ -505,6 +550,7 @@ static int fence_wait_impl(uint64_t value, uint64_t timeout_ns) {
             }
         }
         ok = done >= value;
+        if (pl_on > 0) pl_wait_ns += kern_now_ns() - t0;
     }
     plat_mutex_unlock(&st_lock);
     return ok;

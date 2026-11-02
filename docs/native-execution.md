@@ -121,6 +121,17 @@ must check the slot is still empty when it creates each guest thread.
      resolution.
    - Texture re-uploads are no native regression: the lifted build re-uploads 27-29 a 60-frame window under the same
      settings, the native build 6-8 in its 30-minute run.
+   - The replay, measured (2026-11-02, `trace = perf`: `vk_sync.c` logs each submission's path through the pipeline):
+     a submission waits 5-6 ms for the replay thread (the game hands two over back to back), is replayed in 12 ms,
+     and completes 8.6-9.1 ms after its last part reached the GPU: about 27 ms from the game's submit, the frame
+     interval. Every fence the game waits for is the submission before the newest. The replay thread is idle two
+     thirds of the time and spends its busy time on CPU: 68% preparing draws (`prepare_draw`, of which
+     `bind_resources` 26%), the recorder ring 6.6%, uniform snapshots 5.7%. The recorder's ring was never full.
+   - The runtime had taken CPUs 6 and 7 (an A710 and the X3) from every thread: `perf.c` `cpu_placement` wrote the
+     mask of the thread that presents first, which Android had limited to 0-5, to all threads even with one-per-core
+     off. It now leaves the affinity alone; the frame rate did not move. With CPU 7 free the scheduler still puts the
+     replay there about 5% of the time, and keeping the replay on it gave 11.9 ms against 12.1-12.3 ms: the replay is
+     not bound by the core's clock, so the pin was not kept.
    - Next, in order: the replay's latency and throughput (the GPU starts a frame's work only as the replay hands
      parts over), the write-back as copies recorded with the work that renders those targets (no extra GPU round
      trip at the fence), then GPU work that does not scale with resolution ([android-plan.md](android-plan.md)).
