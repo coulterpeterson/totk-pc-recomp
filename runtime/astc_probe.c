@@ -331,12 +331,13 @@ static int test_case(VkCtx *c, uint32_t bw, uint32_t bh, int srgb) {
 static void timing(VkCtx *c, uint32_t bw, uint32_t bh) {
     uint32_t w = 2048, h = 2048;
     size_t n = (size_t)((w + bw - 1) / bw) * ((h + bh - 1) / bh);
-    uint8_t *blk = malloc(n * 16), *out = malloc((size_t)w * h * 4), tmp[12 * 12 * 4];
+    // n blocks for level 0 and one for the 1x1 level 1 gpu_decode reads after them
+    uint8_t *blk = malloc((n + 1) * 16), *out = malloc((size_t)w * h * 4), tmp[12 * 12 * 4];
     for (size_t k = 0; k < 4096;) {   // valid, non-constant blocks: error blocks would flatter the GPU
         uint64_t v[2] = {rnd64(), rnd64()};
         if ((v[0] & 0x1FF) != 0x1FC && astc_decode_block((uint8_t *)v, bw, bh, false, tmp)) memcpy(blk + 16 * k++, v, 16);
     }
-    for (size_t k = 4096; k < n; k++) memcpy(blk + 16 * k, blk + 16 * (k % 4096), 16);
+    for (size_t k = 4096; k <= n; k++) memcpy(blk + 16 * k, blk + 16 * (k % 4096), 16);
     double a = now_ms();
     astc_decode_ldr_mt(blk, w, h, bw, bh, false, out);
     double cpu = now_ms() - a, wall = 0;

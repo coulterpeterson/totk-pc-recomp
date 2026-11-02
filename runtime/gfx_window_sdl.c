@@ -336,7 +336,13 @@ static void open_window(void *arg) {
     (void)arg;
     int w, h;
     gfx_cfg_window_size(&w, &h);
-    g_win = SDL_CreateWindow("TotK Recomp", w, h, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef __ANDROID__
+    // Immersive from the start: switched on after creation, the first swapchain was made for the activity's area
+    // between the status and navigation bars (1920x970 of the AYN Thor's 1920x1080).
+    if (gfx_cfg_fullscreen()) flags |= SDL_WINDOW_FULLSCREEN;
+#endif
+    g_win = SDL_CreateWindow("TotK Recomp", w, h, flags);
     if (!g_win) {
         rt_log("gfx: SDL_CreateWindow failed (%s)", SDL_GetError());
         return;
