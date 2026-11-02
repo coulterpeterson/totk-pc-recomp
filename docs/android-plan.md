@@ -55,19 +55,32 @@ Done, and how it was checked:
   29.9 fps (33 of 36 four-second windows at 30), no texture re-uploads, replay 11.6 ms, GPU 21.1 ms, 3.0 GB; shadow
   storage 26.7 fps, 54 re-uploads (50 MiB) every 60 frames, 4.0 GB. `hang_report = <s>` logs every guest thread's
   wait and host stack when presents stop.
-- Uncapped (`fps_limit = 60`, `realtime = 1`) it stays at 30: the critical path is the presenting thread's replay,
-  about 26 ms of a 31 ms frame, then the main thread's game code about 4 ms; the GPU needs about 21 ms. The replay's
-  own time is spread out: `bind_resources` 9%, the uniform snapshots (`put`, `vk_usnap_find`) 10%, kernel 11%, locks
-  4.5%, memcmp and memcpy 6%.
+- Uncapped (`fps_limit = 60`, `realtime = 1`) it stays near 30, also with mailbox present (27.8 fps), so the frame
+  really takes about 34 ms of work, not a vsync step. Measured on 2026-11-02:
+  - The presenting thread's "host" time was half a wait: an off-CPU profile put 47% of its time in
+    vkGetSemaphoreCounterValue (Turnip's timeline lock, which the completion thread's wait holds). It now reads the
+    completion thread's value; the wait is gone, the frame rate is not changed.
+  - The critical path now (`tools/crit_path.py`): the replay 12.1 ms, then the game's main thread 11.5 ms and its
+    workers about 8 ms of game code, one after the other. Asynchronous replay does not shorten it (28.6 fps): the
+    game's main thread waits for its render thread every frame.
+  - The presenting and game threads run on the A715/A710 cores at 2.7-2.8 GHz, never on the X3 (1.84 GHz in standard
+    mode) or the A510s; they wait for a CPU less than 3% of the time. The recorder waits for a CPU 8% of the time.
+  - The GPU runs at 550 MHz, 74% busy, 21-23 ms of part time a frame.
+  - Write-watch faults on the game's threads are down to about 150/s on the busiest (placed pools); the game threads'
+    time is 71% our code (lifted game code and the runtime), 17% kernel, 6% clock_gettime (a clock read per SVC and
+    per spin-wait pass).
 
 Open, in order:
-0. 60 fps needs the replay under about 12 ms and the GPU under 16.7 ms:
-   - the replay: record a submission's command buffers on more than one thread (secondary command buffers), and cut
-     the per-draw work (resource binding, the snapshot lookups, the locks);
-   - the GPU at 1280x720: where its 21 ms go (softfloat64, the passes the game draws), with Turnip's own counters.
-1. Start-up stutter: textures streamed in during the first minute are deswizzled on the CPU on the presenting thread.
-2. 1.0.0's patch table: the equipment cooldown fix the real-time step needs, before 60 fps can be the default.
-3. The second screen's focus (not seen working yet), the Thor's performance mode and 120 Hz, a save importer.
+0. The game code's own speed on the main and worker threads (about 20 ms a frame where the Switch takes under 33 ms on
+   1 GHz cores): profile the lifted functions on the critical path and the code the lifter emits for them; the clock
+   reads per SVC and spin pass.
+1. The replay (12 ms): per-draw work (resource binding, the uniform snapshot lookups, the texture lock per binding),
+   the recorder's 16 MiB ring and its drains.
+2. Performance mode with the main and presenting threads on the X3, and an APerformanceHint session.
+3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
+   every pass, clears and discards as load and store ops, render scale.
+4. 1.0.0's equipment cooldown fix; 40 fps on the 120 Hz mode as a step before 60.
+5. Start-up texture streaming on the presenting thread; the second screen's focus; a save importer.
 
 ## 0. Starting point
 
