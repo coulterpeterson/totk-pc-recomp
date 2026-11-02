@@ -79,12 +79,18 @@ Done, and how it was checked:
   thread, which waits for its workers and for virtual cores), and on the 60 Hz display every frame between 16.7 and
   33.3 ms shows as 33.3: the frame rate cannot show a gain until the whole chain fits 16.7 ms.
 
+- At 120 Hz (2026-11-02; the game reads the panel's 120.000 Hz): 29.0 fps with `fps_limit = 60` and the real-time step,
+  30.4 with asynchronous replay added, 30.2 with `fps_limit = 40`, four minutes each, no stops. The game's present
+  interval stays at 2 throughout, but the critical path shows that as a result, not a cause: of the 33.0 ms between
+  presents, 27.3 ms is guest threads running game code (the main thread 12.3 ms, then five of its workers 2.5-4.2 ms
+  each, one after the other), 2.6 ms waits for a virtual core, 1.8 ms wake latency and 0.6 ms sleep. The replay is off
+  the path and the game does not wait for a vsync. Holding the game's interval controller at 1 would not shorten the
+  frame. 60 fps needs the game code on that chain about twice as fast.
+
 Open, in order:
-0. A finer step to measure and to play at: the Thor's 120 Hz mode (ANativeWindow_setFrameRate on the game's window)
-   with `fps_limit = 40`; then asynchronous replay again, which takes the replay off the chain.
-1. The chain itself: what the main thread waits for each frame (its workers, the virtual cores, the presenting
-   thread) with `tools/crit_path.py` at 120 Hz.
-2. The replay (10-12 ms): per-draw work, the recorder's ring and drains.
+1. Game code speed on the chain: profile the main thread and its five workers by lifted function, read the generated
+   code of the hottest, then the levers in "2. CPU" item 4 (guest arguments in host registers at calls, PGO).
+2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
 4. 1.0.0's equipment cooldown fix; performance mode with the main and presenting threads on the X3.
