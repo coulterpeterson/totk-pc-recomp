@@ -100,14 +100,22 @@ void vk_caps_init(VkCtx *c) {
     if (a && !(a & (a - 1)) && a > real_align) l->minStorageBufferOffsetAlignment = a;
     vk_caps.sbuf_align = l->minStorageBufferOffsetAlignment > 4 ? (uint32_t)l->minStorageBufferOffsetAlignment : 0;
 
-    uint32_t want = env_u32("TOTK_VK_SUBGROUP", 32);
+    // Maxwell warps are 32 wide. A device that cannot run 32 (Adreno 7xx: 64-128) is pinned at its narrowest size, so
+    // the stages that allow a pin run at the size the translator was told rather than one the driver picks per
+    // pipeline (TOTK_VK_SUBGROUP=<n> picks the size).
+    uint32_t want = env_u32("TOTK_VK_SUBGROUP", 0);
+    if (!want) want = f13.subgroupSizeControl && p13.minSubgroupSize > 32 ? p13.minSubgroupSize : 32;
     int pin = f13.subgroupSizeControl && cfg_bool("TOTK_VK_SUBGROUP_PIN") && p13.minSubgroupSize <= want &&
               want <= p13.maxSubgroupSize;
     vk_caps.sg_size = want;
     vk_caps.sg_pin_stages = pin ? p13.requiredSubgroupSizeStages : 0;
     static const VkShaderStageFlags stage[3] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_COMPUTE_BIT};
+    // A stage that is not pinned may run at any size up to maxSubgroupSize, not only the subgroupSize the device names
+    // (Adreno 7xx names 64 and allows 128). Told 64, the translator picks a ballot's word by lane bit 5 alone, wrong for
+    // lanes 64-127; told the largest size, it indexes the words by lane / 32, right for any size up to it.
+    uint32_t widest = f13.subgroupSizeControl && p13.maxSubgroupSize > sg.subgroupSize ? p13.maxSubgroupSize : sg.subgroupSize;
     uint32_t told[3];
-    for (int i = 0; i < 3; i++) told[i] = vk_caps.sg_pin_stages & stage[i] ? want : sg.subgroupSize;
+    for (int i = 0; i < 3; i++) told[i] = vk_caps.sg_pin_stages & stage[i] ? want : widest;
     // Gathers (TLD4) pick their four texels with Maxwell's rounding; AMD and Intel round a coordinate that sits between
     // two texels the other way, which draws dark lines along object edges in shadow-map filtering (docs/maxwell.md 2.10;
     // BotW and TotK on AMD). The translator biases gather coordinates by the host's sub-texel precision; NVIDIA rounds
