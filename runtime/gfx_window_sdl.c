@@ -189,7 +189,9 @@ static void handle(const SDL_Event *e) {
         break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
+#ifndef __ANDROID__   // Android: the app's lifecycle stands for the focus (lifecycle_watch)
         gfx_window_focus_changed(e->type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+#endif
         break;
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -207,12 +209,16 @@ static volatile int32_t g_background;
 
 static bool lifecycle_watch(void *data, SDL_Event *e) {
     (void)data;
+    // The game hears the focus from here rather than from the window: on a device with a second screen (the AYN Thor)
+    // the window loses the focus whenever the other screen is touched, and the game stopped while it still showed.
     if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND && !plat_xchg32(&g_background, 1)) {
         rt_log("gfx: the app goes to the background: swapchain and surface released");
+        gfx_window_focus_changed(0);
         gfx_window_release_vk();
     } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND && plat_xchg32(&g_background, 0)) {
         rt_log("gfx: the app is back: a new surface at the next present");
         gfx_window_mark_dirty();
+        gfx_window_focus_changed(1);
     }
     return true;
 }
