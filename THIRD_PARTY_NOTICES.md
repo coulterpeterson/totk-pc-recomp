@@ -105,3 +105,12 @@ folder's `licenses/` and in each component's own folder.
 | `totk_xlate` (NativeAOT linux-x64 build of `tools/xlate/`, linked with the folder's clang, lld and sysroot) | built by `tools/build_xlate.py --llvm --sysroot` | MIT | `bin/totk_xlate` |
 | AppImage type-2 runtime (static; includes libfuse and squashfuse), the AppImage's first part; appimagetool packs the folder and is not distributed | https://github.com/AppImage/type2-runtime | MIT; libfuse LGPL-2.1; squashfuse BSD-2-Clause | the AppImage header |
 | MacNativeGames shader variant list | as in the installer release row above | MIT | `data/shader_list.tsv` |
+
+## Distributed in the Android APK
+
+`tools/build_android_deps.py` fetches and builds these at the pinned commit; `tools/build_apk.py` packs the result.
+
+| Component | Source | License | Where in the APK |
+|---|---|---|---|
+| libadrenotools, which loads a player's Vulkan driver (Mesa Turnip, Qualcomm's own) into a linker namespace of its own | https://github.com/bylaws/libadrenotools @ `8fae8ce254dfc1344527e05301e43f37dea2df80`, Copyright (c) 2021 Billy Laws | BSD-2-Clause | linked into `lib/arm64-v8a/libtotk.so`; its hooks as `libhook_impl.so`, `libmain_hook.so`, `libfile_redirect_hook.so`, `libgsl_alloc_hook.so` |
+| linkernsbypass, libadrenotools' submodule | https://github.com/bylaws/liblinkernsbypass @ `aa3975893d83ef1bc84c321ec60c65fbf1287887`, Copyright (c) 2021 Billy Laws | BSD-2-Clause | linked into `libtotk.so` and `libhook_impl.so` |

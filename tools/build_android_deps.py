@@ -1,7 +1,9 @@
 """Build the runtime's libraries for Android arm64 with the NDK: toolchain/android/arm64-v8a/{include,lib}.
 
-SDL3 (shared, libSDL3.so goes into the APK), Opus, libvpx and zstd (static, linked into libtotk.so), plus the
-Vulkan-Headers and the Vulkan Memory Allocator header. Each source is fetched at a pinned tag into
+SDL3 (shared, libSDL3.so goes into the APK), Opus, libvpx and zstd (static, linked into libtotk.so), libadrenotools
+(static, with its four hook libraries for the APK: it loads a player's Vulkan driver, such as Mesa Turnip for Adreno,
+into a linker namespace of its own), plus the Vulkan-Headers and the Vulkan Memory Allocator header. Each source is
+fetched at a pinned tag or commit into
 toolchain/android/src/<name> and built out of tree. The versions are the ones the Windows build ships
 (THIRD_PARTY_NOTICES.md). Run with .venv; needs git, cmake, ninja (the Android SDK's cmake directory has one) and
 make.
@@ -23,14 +25,17 @@ ABI = 'arm64-v8a'
 TRIPLE = 'aarch64-linux-android'
 DEFAULT_API = 29   # Android 10, the oldest the SDLActivity of SDL 3.4 supports with Vulkan
 
-# name: (git URL, tag)
+# name: (git URL, tag or commit; a commit is checked out with its submodules)
 SOURCES = {
     'SDL': ('https://github.com/libsdl-org/SDL.git', 'release-3.4.18'),
     'opus': ('https://github.com/xiph/opus.git', 'v1.5.2'),
     'libvpx': ('https://github.com/webmproject/libvpx.git', 'v1.17.0'),
     'zstd': ('https://github.com/facebook/zstd.git', 'v1.5.7'),
     'Vulkan-Headers': ('https://github.com/KhronosGroup/Vulkan-Headers.git', 'v1.4.363'),
+    'libadrenotools': ('https://github.com/bylaws/libadrenotools.git', '8fae8ce254dfc1344527e05301e43f37dea2df80'),
 }
+# The hook libraries libadrenotools loads from the app's native library directory (runtime/android.c)
+ADRENOTOOLS_HOOKS = ('libhook_impl.so', 'libmain_hook.so', 'libfile_redirect_hook.so', 'libgsl_alloc_hook.so')
 # The header tools/build_game.py pins for the Windows release (VMA_FETCH there)
 VMA = ('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.4.0/include/vk_mem_alloc.h',
        '8487b7995ad3b263eb73bc5b9a77d71aa69b6bef5d58a715c02d2663afd81f1a')
@@ -63,14 +68,20 @@ def run(cmd, **kw):
 
 def fetch(name, src):
     url, tag = SOURCES[name]
+    commit = len(tag) == 40 and all(c in '0123456789abcdef' for c in tag)
     if (src / '.git').is_dir():
-        have = subprocess.run(['git', '-C', str(src), 'describe', '--tags', '--exact-match'], capture_output=True,
-                              text=True).stdout.strip()
+        what = ['rev-parse', 'HEAD'] if commit else ['describe', '--tags', '--exact-match']
+        have = subprocess.run(['git', '-C', str(src), *what], capture_output=True, text=True).stdout.strip()
         if have == tag:
             return
         shutil.rmtree(src)
     src.parent.mkdir(parents=True, exist_ok=True)
-    run(['git', 'clone', '-q', '--depth', '1', '--branch', tag, url, src])
+    if commit:
+        run(['git', 'clone', '-q', url, src])
+        run(['git', '-C', src, 'checkout', '-q', tag])
+        run(['git', '-C', src, 'submodule', 'update', '-q', '--init', '--recursive'])
+    else:
+        run(['git', 'clone', '-q', '--depth', '1', '--branch', tag, url, src])
 
 
 def cmake_build(src, build, prefix, ndk, api, ninja, extra):
@@ -140,6 +151,10 @@ def main():
                          '-DZSTD_BUILD_TESTS=OFF'])
         elif name == 'libvpx':
             build_libvpx(src, build, prefix, args.ndk, args.api)
+        elif name == 'libadrenotools':
+            # Static library and the hooks (shared); linkernsbypass, which both use, is not installed by its CMake
+            cmake_build(src, build, prefix, args.ndk, args.api, ninja, ['-DBUILD_SHARED_LIBS=OFF', '-DGEN_INSTALL_TARGET=ON'])
+            shutil.copy2(build / 'lib' / 'linkernsbypass' / 'liblinkernsbypass.a', prefix / 'lib')
         elif name == 'Vulkan-Headers':
             cmake_build(src, build, prefix, args.ndk, args.api, ninja, ['-DVULKAN_HEADERS_ENABLE_MODULE=OFF'])
     fetch_vma(prefix)

@@ -1,8 +1,9 @@
 """Package build/<version>-android/libtotk.so as an APK: build/<version>-android/totk.apk.
 
 The APK is SDL's Java activity (SDL 3.4, from tools/build_android_deps.py's source tree), tools/android/'s manifest and
-MainActivity, libSDL3.so, libtotk.so and the shader translator as libtotk_xlate.so (tools/build_xlate.py --android;
-an app runs programs only from its native library folder). No Gradle: javac, the SDK's d8, aapt2, zipalign and
+MainActivity, libSDL3.so, libtotk.so, the shader translator as libtotk_xlate.so (tools/build_xlate.py --android;
+an app runs programs only from its native library folder) and libadrenotools' four hook libraries, which it loads from
+that folder when a player's Vulkan driver is in gpu_driver/. No Gradle: javac, the SDK's d8, aapt2, zipalign and
 apksigner do the steps. The libraries are stored uncompressed and page-aligned.
 It is signed with the local debug key (~/.android/debug.keystore, made with keytool when missing).
 
@@ -69,6 +70,10 @@ def main():
     sdl_so = DEPS / 'arm64-v8a' / 'lib' / 'libSDL3.so'
     if not sdl_java.is_dir() or not sdl_so.is_file():
         sys.exit('SDL for Android not found: run tools/build_android_deps.py')
+    from build_android_deps import ADRENOTOOLS_HOOKS
+    hooks = [DEPS / 'arm64-v8a' / 'lib' / name for name in ADRENOTOOLS_HOOKS]   # libadrenotools loads them (driver_load)
+    if not all(h.is_file() for h in hooks):
+        sys.exit('libadrenotools hooks not found: run tools/build_android_deps.py --only libadrenotools')
     xlate = ROOT / 'build' / 'xlate-android' / 'totk_xlate'
     if not xlate.is_file():
         sys.exit(f'{xlate} not found: run tools/build_xlate.py --android')
@@ -100,7 +105,7 @@ def main():
             for item in base.infolist():
                 z.writestr(item, base.read(item.filename))
             z.write(tmp / 'classes.dex', 'classes.dex', zipfile.ZIP_DEFLATED)
-            for path, name in ((sdl_so, sdl_so.name), (so, so.name), (xlate, 'libtotk_xlate.so')):
+            for path, name in ((sdl_so, sdl_so.name), (so, so.name), (xlate, 'libtotk_xlate.so'), *((h, h.name) for h in hooks)):
                 z.write(path, f'lib/arm64-v8a/{name}', zipfile.ZIP_STORED)
         aligned = tmp / 'aligned.apk'
         # -P 16: libraries on 16 KiB boundaries, which also covers 4 KiB-page kernels

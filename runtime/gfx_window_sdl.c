@@ -30,6 +30,7 @@
 #include "vk.h"
 #if defined(RT_VOLK) && defined(__ANDROID__)
 #include <vulkan/vulkan_android.h>   // after vk.h: the core types first
+#include <adrenotools/driver.h>
 #endif
 #include "platform/platform.h"
 
@@ -266,9 +267,28 @@ static int video_up(void) {
 // from it through volk (vk.h RT_VOLK), and makes the window's surface with them. SDL keeps the system's loader for
 // its window. A relative path is beside the executable; android.c points it at a driver the player put in gpu_driver/.
 // Surfaces for SDL's android and offscreen video drivers only.
+// On Android the drivers players use (Turnip builds and Qualcomm's own, packaged for Eden and other emulators) are
+// Android HAL modules that need libcutils, libhardware and libsync, which an app's linker namespace cannot load.
+// libadrenotools (toolchain/android, BSD-2) opens a private copy of the system's loader in a namespace of its own whose
+// hooks load the given driver in place of the system's; its vkGetInstanceProcAddr is the loader's, so it is used as
+// any loader is. Its hook libraries come with the APK, in the native library folder beside libtotk.so.
 typedef VkResult (VKAPI_PTR *PFN_negotiate)(uint32_t *version);
 static PFN_vkGetInstanceProcAddr g_driver_gipa;
 static int g_driver_tried;
+
+#ifdef __ANDROID__
+static void *adreno_open(const char *path) {
+    char dir[PLAT_PATH_MAX], hooks[PLAT_PATH_MAX];
+    const char *name = strrchr(path, '/');
+    Dl_info d;
+    if (!name || !dladdr((void *)adreno_open, &d) || !d.dli_fname || !strrchr(d.dli_fname, '/')) return NULL;
+    snprintf(dir, sizeof dir, "%.*s", (int)(name + 1 - path), path);   // with its '/': libadrenotools appends the name
+    snprintf(hooks, sizeof hooks, "%.*s", (int)(strrchr(d.dli_fname, '/') - d.dli_fname), d.dli_fname);
+    void *lib = adrenotools_open_libvulkan(RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, NULL, hooks, dir, name + 1, NULL, NULL);
+    if (!lib) rt_log("gfx: libadrenotools could not open %s (hooks in %s)", path, hooks);
+    return lib;
+}
+#endif
 
 static int driver_load(void) {
     if (g_driver_tried) return g_driver_gipa != NULL;
@@ -279,8 +299,18 @@ static int driver_load(void) {
     char *cut = v[0] != '/' && plat_exe_path(exe, sizeof exe) ? plat_last_sep(exe) : NULL;
     if (cut) *cut = 0, snprintf(path, sizeof path, "%s/%s", exe, v);
     else snprintf(path, sizeof path, "%s", v);
+#ifdef __ANDROID__
+    void *lib = adreno_open(path);
+    if (lib && (g_driver_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr"))) {
+        rt_log("gfx: Vulkan driver %s through libadrenotools", path);
+        return 1;
+    }
+    rt_log("gfx: the system's Vulkan driver stays in use");
+    return 0;
+#else
     void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!lib) rt_fatal("gfx: TOTK_VK_DRIVER %s cannot be loaded: %s", path, dlerror());
+#endif
     g_driver_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vk_icdGetInstanceProcAddr");
     if (!g_driver_gipa) g_driver_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
     if (!g_driver_gipa) rt_fatal("gfx: TOTK_VK_DRIVER %s exports no vkGetInstanceProcAddr", path);

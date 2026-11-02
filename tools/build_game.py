@@ -758,7 +758,8 @@ def android_toolchain(ndk):
                   '-Wl,--pack-dyn-relocs=relr', '-Wl,--no-undefined', '"-Wl,-Map=$builddir/totk.map"']
     # The link runs through clang, not clang++, so the C++ runtime of the menu and VMA is named here: the NDK's static
     # libc++, so the APK needs no libc++_shared.so beside it.
-    LINK_LIBS = ['-lSDL3', '-l:libopus.a', '-l:libvpx.a', '-l:libzstd.a', '-l:libc++_static.a', '-l:libc++abi.a',
+    LINK_LIBS = ['-lSDL3', '-l:libopus.a', '-l:libvpx.a', '-l:libzstd.a', '-l:libadrenotools.a', '-l:liblinkernsbypass.a',
+                 '-l:libc++_static.a', '-l:libc++abi.a',
                  '-landroid', '-llog', '-lm', '-ldl']   # no -lvulkan: volk takes the functions from the loaded driver
     volk_flags()
 
