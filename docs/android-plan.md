@@ -115,13 +115,22 @@ Done, and how it was checked:
   to 2.52 (three alternating pairs), but the game threads' running time rose from 26.0 to 27.1 ms and the interval
   stayed 33.4 ms. It stays a setting, off by default.
 - In every configuration so far the interval settles near 33.3 ms, and what the critical path saves in one kind of
-  time reappears in another. The only faster runs (29.5-30 ms, 33-34 fps) were the first run after the device sat
-  idle, so the CPU's clock and temperature are likely a large part of the difference between runs. Next: log the
-  clocks and temperature through a run, and compare performance mode.
+  time reappears in another.
+- Clocks and heat (six minutes each, 120 Hz uncapped, asynchronous replay, sampled every 4 s): in standard power mode
+  the mid cores hold 2.7-2.8 GHz (their maximum) at up to 91 C, the X3 stays at 1.84 of 3.19 GHz and the GPU at 550 of
+  680 MHz, 72-77% busy, and every 60 s window is 29.8-30.7 fps: nothing throttles. In performance mode the X3 runs at
+  3.19 GHz and the GPU at 615-680 MHz, 67-80% busy, and the windows are 34.5-37 fps (one late window 29.9, with the
+  clocks unchanged: the scripted walk reaches a heavier view). Critical path there: interval 28.5-28.9 ms
+  (34.7-35.2 fps), game threads running 22.1-23.2 ms, GPU 19.0 ms, replay 9.7 ms. `wait_spin = 50` gives nothing in
+  performance mode either (34.3 and 34.1 fps against 35.2, 34.7 and 34.7).
+- So 40 fps needs about 4 ms off the chain in performance mode, and 60 fps needs the chain and the GPU both under
+  16.7 ms. For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
+  unevenly, and the real-time step needs the equipment cooldown fix 1.0.0's patch table lacks.
 
 Open, in order:
-1. The device's clocks and temperature through a run, then performance mode: the runs' spread may be thermal.
-   For 60 fps: native execution of the guest code ("2. CPU" item 5), a separate project.
+1. 40 fps in performance mode: about 4 ms off a 28.8 ms chain (the main thread's 8-10 ms of game code, the replay's
+   9.7 ms off the chain only with asynchronous replay), and 1.0.0's equipment cooldown fix for the real-time step.
+   For 60 fps: native execution of the guest code ("2. CPU" item 5), a separate project, and the GPU's 19 ms.
 2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
