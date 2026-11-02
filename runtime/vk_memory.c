@@ -205,7 +205,18 @@ static void placed_release(VkCtx *c, PoolRec *r) {
 }
 
 // CPU-visible storage: the guest pages themselves become the buffer's memory (VK_EXT_external_memory_host).
+// The write watch reports and re-arms only the CPU-visible pools' pages (plat_mem_watch_only): on the AYN Thor the
+// queries' 2 MiB regions re-armed the game's own heap data beside the pools every submission, and its main thread took
+// about 9500 protection faults a second for memory the GPU never reads.
+static int import_pool_storage(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size);
+
 static int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
+    int ok = import_pool_storage(c, r, addr, size);
+    if (ok) plat_mem_watch_only(r->import_lo, r->import_hi - r->import_lo, 1);
+    return ok;
+}
+
+static int import_pool_storage(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     if (placed_on && placed_pool(c, r, addr, size)) return 1;
     if (shadow_on) return shadow_pool(c, r, addr, size);
     if (!p_host_props)
@@ -326,6 +337,7 @@ static PoolRec *phys_find(const pool_t *key) {
 }
 
 static void destroy_rec(VkCtx *c, PoolRec *r) {
+    if (r->kind == POOL_IMPORT && r->import_hi > r->import_lo) plat_mem_watch_only(r->import_lo, r->import_hi - r->import_lo, 0);
     if (r->placed) placed_release(c, r);
     if (r->mbuf) vmaDestroyBuffer(c->vma, r->mbuf, r->malloc_);
     if (r->salloc) vmaDestroyBuffer(c->vma, r->buf, r->salloc), r->buf = VK_NULL_HANDLE;

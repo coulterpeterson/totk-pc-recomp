@@ -919,6 +919,9 @@ static uint64_t *mp_dirty;           // a bit per 4 KiB page below PS_LIMIT
 // keeps that local while the mappings stay bounded (one per unit at most).
 #define UNIT_PAGES 16
 static uint64_t *mp_unit, *mp_unit_first;
+// plat_mem_watch_only: once a range is registered, only registered pages are reported and armed again; the others
+// fault once, stay writable and are left out. NULL until then: every watched page counts.
+static uint64_t *mp_only;
 static struct { uint64_t lo, hi; } mp_range[8];
 static int mp_ranges;
 
@@ -1039,6 +1042,25 @@ void plat_mem_unarm(uint64_t addr, uint64_t n) {
     plat_mutex_unlock(&vm_lock);
 }
 
+void plat_mem_watch_only(uint64_t addr, uint64_t n, int on) {
+    if (!mp_on || !n || addr + n > PS_LIMIT) return;
+    plat_mutex_lock(&vm_lock);
+    if (!mp_only) {
+        void *a = mmap(NULL, PS_LIMIT / PG / 8, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (a == MAP_FAILED) {
+            fprintf(stderr, "platform: cannot map the write watch's range bitmap (%s)\n", strerror(errno));
+            abort();
+        }
+        __atomic_store_n(&mp_only, a, __ATOMIC_RELEASE);
+    }
+    for (uint64_t p = addr / PG; p < (addr + n + PG - 1) / PG; p++) {
+        uint64_t m = 1ull << (p % 64);
+        if (on) __atomic_fetch_or(&mp_only[p / 64], m, __ATOMIC_RELEASE);
+        else __atomic_fetch_and(&mp_only[p / 64], ~m, __ATOMIC_RELEASE);
+    }
+    plat_mutex_unlock(&vm_lock);
+}
+
 static int bit(const uint64_t *b, uint64_t p) { return b && (__atomic_load_n(&b[p / 64], __ATOMIC_ACQUIRE) >> (p % 64) & 1); }
 
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on) {
@@ -1092,6 +1114,7 @@ static uint64_t mp_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t 
     if (reset) plat_mutex_lock(&vm_lock);
     for (uint64_t w = p0 / 64; w <= (p1 - 1) / 64 && got < max; w++) {
         uint64_t bits = __atomic_load_n(&mp_dirty[w], __ATOMIC_ACQUIRE), take = 0;
+        if (mp_only) bits &= __atomic_load_n(&mp_only[w], __ATOMIC_ACQUIRE);
         if (w == p0 / 64) bits &= ~0ull << (p0 % 64);
         if (w == (p1 - 1) / 64 && p1 % 64) bits &= (1ull << (p1 % 64)) - 1;
         for (uint64_t b = bits; b && got < max; b &= b - 1) {

@@ -224,6 +224,11 @@ void plat_mem_unarm(uint64_t addr, uint64_t n);
 // where page-sized protection changes would leave a mapping per page until the process runs out of them. A no-op where
 // plat_mem_written does not use page protection.
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on);
+// [addr, addr + n) is (on) or is no longer (0) memory whose writes plat_mem_written must report. Once any range is
+// registered, pages outside every registered range are no longer reported or armed again, so a write to them faults at
+// most once: the page-protection watch's cost in faults stays with the memory the caller reads back (vk_memory.c: the
+// CPU-visible pools). A no-op where plat_mem_written does not use page protection.
+void plat_mem_watch_only(uint64_t addr, uint64_t n, int on);
 // A write that faulted on a read-only page at addr goes to fn first; fn returns 1 when it made the page writable and
 // the write should run again, 0 to let the fault go on (to the crash handler). One hook per process.
 void plat_mem_fault_hook(int (*fn)(uint64_t addr));
