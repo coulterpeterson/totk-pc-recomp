@@ -20,19 +20,24 @@ Done, and how it was checked:
   library (`TOTK_VK_DRIVER`, the route a Turnip build takes on Android through `gpu_driver/`). On the Android 16
   emulator Vulkan comes up through volk and a library copied from `gpu_driver/` loads from private storage.
 
+- On the AYN Thor (Adreno 740, Qualcomm driver 0676.53, Android 13), stock driver, version 1.0.0: boots, renders the
+  title screen and the prologue upright and full screen, and plays at a steady 30 fps in the opening cave (scripted
+  input, `tools/input/load_save.txt` plus a held stick): 18 of 20 four-second windows had every frame at 33 ms, the
+  other two 7 and 9 frames at 50 ms (pacing, no pipeline or shader waits). GPU about 20 ms a frame, render thread about
+  18-20 ms, working set 3.1 GB, VRAM 2.6 GB. The driver has BC formats, so the CPU BC fallback is not used there.
+  Fixes it needed: shaderInt64 no longer required, dynamic vertex input off on Qualcomm's driver (skinned models were
+  streaks), the swapchain in the identity transform (the panel is portrait) and rebuilt after the resize to immersive
+  mode, the process ended when the game returns, TMPDIR set, resumable data pushes for wireless debugging.
+
 Open, in order:
-0. On the Thor: install, run, read `adb logcat -s totk`; with the stock driver first, then with a Turnip build in
-   `gpu_driver/` (`tools/install_android.py --gpu-driver`). Whether a Turnip build's own dependencies load without
-   libadrenotools' linker namespace help is the open question there.
-1. GPU on the Thor: no Android GPU has run the Vulkan path yet (the emulator lacks push descriptors). Without BC
-   formats the textures are now decoded on the CPU (`tex_bc.c`), at 4-8x their memory (several GB by the title
-   screen), and the game's own BC4 encoder draws are left out; it is a last resort. Depth clip control stays required:
-   making it optional (the translator's z rewrite) rendered only black on lavapipe and was taken out again; ANGLE needs
-   the extension, so Qualcomm's current drivers are expected to have it. Loading Mesa Turnip, or patching the driver with libadrenotools'
-   bcenabler (functions through volk), is the better answer; building libadrenotools waits for the user's go-ahead.
+0. Play outdoors on the Thor (Great Sky Island, the surface) and read the perf lines (`trace = perf` in totk.ini):
+   the cave is a light scene. Then the same with a Turnip build in `gpu_driver/` (`tools/install_android.py
+   --gpu-driver`); whether its own dependencies load without libadrenotools' linker namespace help is open.
+1. 60 fps: the Android profile caps at 30 (FPS_LIMIT). The render thread's 18-20 ms and the GPU's 20 ms leave no room
+   for 16.7 ms frames yet; the replay (NVN to Vulkan, about 17 ms here) is the first thing to look at.
 2. Window lifecycle: done in code (surface released going to the background, made again on return), untested on a
-   device.
-3. Milestone 0 measurements on the device, then frame pacing and the speed work of sections 2 and 5.
+   device. adb's injected key events do not reach the game; the Thor's own controls appear as an Xbox pad.
+3. Depth clip control stays required; Qualcomm's driver has it.
 
 ## 0. Starting point
 
