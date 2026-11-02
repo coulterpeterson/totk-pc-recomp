@@ -162,6 +162,8 @@ int SDL_main(int argc, char **argv) {
     snprintf(profile, sizeof profile, "%s/profile", home);
     mkdir(profile, 0770);
     setenv("TOTK_HOME", home, 1);
+    const char *cache = SDL_GetAndroidCachePath();   // Android has no /tmp: plat_temp_dir reads TMPDIR
+    if (cache) setenv("TMPDIR", cache, 0);
     if (chdir(home)) __android_log_print(ANDROID_LOG_WARN, "totk", "chdir %s: %s", home, strerror(errno));
     find_translator(home);
     find_gpu_driver(home);
