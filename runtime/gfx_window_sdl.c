@@ -242,8 +242,17 @@ static void window_main(void *arg) {
     if (!g_video_ok) return;
     for (;;) {
         SDL_Event e;
+#ifdef __ANDROID__
+        // SDL's Android video driver cannot wait for events, so SDL_WaitEventTimeout polls without pause: on the AYN
+        // Thor the window thread kept a core at 100% (joystick checks and clock reads), next to the game's threads.
+        // Polled every 2 ms instead.
+        while (SDL_PollEvent(&e)) handle(&e);
+        input_sdl_idle();
+        SDL_DelayNS(2000000);
+#else
         if (SDL_WaitEventTimeout(&e, 100)) handle(&e);
         else input_sdl_idle();   // a cursor change requested from another thread meanwhile
+#endif
     }
 }
 
