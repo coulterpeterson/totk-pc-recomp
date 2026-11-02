@@ -42,6 +42,7 @@ typedef struct VkCtx {
         has_conditional_rendering, has_transform_feedback, has_provoking_vertex, has_device_fault, has_memory_budget,
         has_robustness2, has_buffer_device_address, has_fragment_shader_interlock, has_buffer_marker,
         has_external_memory_host,           // VK_EXT_external_memory_host enabled; without it the back end uses shadow storage
+        has_map_placed,                     // VK_EXT_map_memory_placed with memoryMapPlaced and memoryUnmapReserve (vk_memory.c)
         has_astc_ldr,                       // textureCompressionASTC_LDR (enabled when reported)
         has_calibrated,                     // VK_KHR/EXT_calibrated_timestamps (GPU idle split in the perf line)
         has_hdr_metadata;                   // VK_EXT_hdr_metadata (vk_hdr.c vk_hdr_metadata)
@@ -52,6 +53,7 @@ typedef struct VkCtx {
     // VK_FEEDBACK_RESTART (the pass ends and restarts behind the full barrier).
     int feedback;                           // VK_FEEDBACK_*
     uint32_t min_imported_host_alignment;   // VK_EXT_external_memory_host
+    uint64_t min_placed_alignment;          // VK_EXT_map_memory_placed
     int device_index;                       // index in vkEnumeratePhysicalDevices
 } VkCtx;
 enum { VK_FEEDBACK_OFF, VK_FEEDBACK_RESTART, VK_FEEDBACK_LAYOUT };
@@ -243,6 +245,7 @@ int vk_mem_mirror_probe(uint64_t addr);   // --probe-vkexec: the pool at addr ge
                                           // 1 when it has one
 int  vk_mem_shadow_default(void);                 // shadow storage requested (TOTK_SHADOW, else on except on Windows)
 void vk_mem_set_host_import(int ok);              // before vk_mem_class_log: 0 = no external_memory_host, shadow storage forced
+void vk_mem_set_placed(const VkCtx *c);           // after vkCreateDevice: c->has_map_placed (vk_memory.c placed_pool)
 void vk_mem_class_log(const VkPhysicalDeviceProperties *p, const VkPhysicalDeviceMemoryProperties *m);   // once
 int vk_mem_class_of(uint64_t addr);               // VK_MCLS_* of the pool at addr (NONE when unbacked)
 void vk_mem_census(uint64_t frame);               // at each present: pool census and traffic, logged at frame 1800 and,

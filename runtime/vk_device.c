@@ -247,6 +247,7 @@ typedef struct {
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl;
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT fbl;
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
+    VkPhysicalDeviceMapMemoryPlacedFeaturesEXT placed;
 } FeatureChain;
 
 static int create_device(void) {
@@ -254,7 +255,7 @@ static int create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[48];
+    const char *ext[56];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
     if (g_vk.has_external_memory_host) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
@@ -294,9 +295,18 @@ static int create_device(void) {
         CHAIN(fbl, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT);
         CHAIN(lr, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR);
     }
-    vk_dlaa_device_exts(ep, ne, ext, &n_ext, 40);   // NGX's; the eight slots after it stay for the ones below
+    vk_dlaa_device_exts(ep, ne, ext, &n_ext, 40);   // NGX's; the sixteen slots after it stay for the ones below
     if (has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) { g_vk.has_memory_budget = 1; ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME; }
     // GPU timestamps on the CPU clock (vk_sync.c): the perf line splits GPU idle time into waiting for a submission or not.
+    // Placed mappings (vk_memory.c placed_pool): only where host pointers cannot be imported
+    void **placed_link = NULL;
+    if (!g_vk.has_external_memory_host && has_ext(ep, ne, VK_KHR_MAP_MEMORY_2_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME)) {
+        ext[n_ext++] = VK_KHR_MAP_MEMORY_2_EXTENSION_NAME;
+        ext[n_ext++] = VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME;
+        placed_link = tail;
+        CHAIN(placed, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_FEATURES_EXT);
+    }
     if (has_ext(ep, ne, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) { g_vk.has_calibrated = 2; ext[n_ext++] = VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME; }
     else if (has_ext(ep, ne, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) { g_vk.has_calibrated = 1; ext[n_ext++] = VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME; }
     if (vk_hdr_wanted() && has_ext(ep, ne, VK_EXT_HDR_METADATA_EXTENSION_NAME)) {   // the display's peak (vk_hdr_metadata)
@@ -327,6 +337,7 @@ static int create_device(void) {
         vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
         if (!vk_caps_gpl(&c->gpl, &gp)) { *gpl_link = NULL; n_ext -= 2; }
     }
+    g_vk.has_map_placed = placed_link && c->placed.memoryMapPlaced && c->placed.memoryUnmapReserve;
     const VkPhysicalDeviceFeatures *h = &c->f2.features;
     const char *miss = NULL;
     if (!c->f12.timelineSemaphore) miss = "timelineSemaphore";
@@ -385,6 +396,13 @@ static int create_device(void) {
     VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &emh};
     vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
     g_vk.min_imported_host_alignment = (uint32_t)emh.minImportedHostPointerAlignment;
+    if (g_vk.has_map_placed) {
+        VkPhysicalDeviceMapMemoryPlacedPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 pp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &mp};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &pp);
+        g_vk.min_placed_alignment = mp.minPlacedMemoryMapAlignment;
+    }
+    vk_mem_set_placed(&g_vk);
     vk_caps_init(&g_vk);
 
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.device, .instance = g_vk.instance,

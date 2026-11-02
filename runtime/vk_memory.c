@@ -64,6 +64,7 @@ typedef struct PoolRec {
     uint8_t *smap;                     // its mapping; offsets as in buf (from import_lo)
     uint32_t sgen;                     // gen_lock: every page write stamped up to this generation is in the shadow
     volatile uint8_t stouched;         // on the touched list: the GPU may use it in the submission being recorded
+    uint8_t placed;                    // POOL_IMPORT: mem is mapped over [import_lo, import_hi) (placed_pool)
 } PoolRec;
 
 static void mirror_forget(PoolRec *r);   // pool_lock exclusive: off the mirrored list
@@ -108,8 +109,99 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
     return -1;
 }
 
+// ---- placed pools (VK_EXT_map_memory_placed), where host pointers cannot be imported (Android: Qualcomm's KGSL)
+// The pool's pages are replaced by the buffer's own memory, mapped at the same address: the guest's writes go
+// straight to memory the GPU reads, as with an import, with no shadow copy before each submission. The guest's bytes
+// are copied over at the switch; when the pool goes, the range gets ordinary memory and its bytes back. The memory
+// is coherent and CPU-cached (the guest reads it as its own); a device without such a type, a range not aligned for
+// a placed mapping, or a failed mapping leaves the pool to shadow storage. TOTK_PLACED=0 turns it off.
+// Measured on the AYN Thor (Turnip): shadow storage cost the presenting thread about a fifth of its replay time in
+// write-watch queries, re-protection and copies, and the game's threads a fault per first write to a pool page.
+static int placed_on;
+static PFN_vkMapMemory2KHR p_map2;
+static PFN_vkUnmapMemory2KHR p_unmap2;
+
+void vk_mem_set_placed(const VkCtx *c) {
+    const char *e = cfg_get("TOTK_PLACED");
+    placed_on = c->has_map_placed && !(e && !strcmp(e, "0"));
+    if (placed_on) {
+        p_map2 = (PFN_vkMapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkMapMemory2KHR");
+        p_unmap2 = (PFN_vkUnmapMemory2KHR)vkGetDeviceProcAddr(c->device, "vkUnmapMemory2KHR");
+        placed_on = p_map2 && p_unmap2;
+    }
+    if (placed_on) rt_log("mem: CPU-visible pools are device memory mapped over the guest's pages (VK_EXT_map_memory_placed, "
+                          "alignment %#llx; TOTK_PLACED=0: shadow storage)", (unsigned long long)c->min_placed_alignment);
+}
+
+static int cached_coherent_type(const VkCtx *c, uint32_t bits) {
+    VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    for (uint32_t i = 0; i < c->mem_props.memoryTypeCount; i++)
+        if ((bits >> i & 1) && (c->mem_props.memoryTypes[i].propertyFlags & want) == want) return (int)i;
+    return -1;
+}
+
+static int placed_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
+    uint64_t al = c->min_placed_alignment > 0x1000 ? c->min_placed_alignment : 0x1000;
+    uint64_t lo = addr & ~0xfffull, hi = (addr + size + 0xfff) & ~0xfffull, n = hi - lo;
+    if ((lo | n) & (al - 1)) return 0;
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = n, .usage = pool_usage(c),
+                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    VkBuffer buf;
+    if (vkCreateBuffer(c->device, &bi, NULL, &buf) != VK_SUCCESS) return 0;
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(c->device, buf, &req);
+    int type = cached_coherent_type(c, req.memoryTypeBits);
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = req.size > n ? req.size : n,
+                               .memoryTypeIndex = (uint32_t)type};
+    uint8_t *keep = type >= 0 ? malloc(n) : NULL;
+    if (!keep || vkAllocateMemory(c->device, &ai, NULL, &mem) != VK_SUCCESS || vkBindBufferMemory(c->device, buf, mem, 0) != VK_SUCCESS) {
+        free(keep);
+        if (mem) vkFreeMemory(c->device, mem, NULL);
+        vkDestroyBuffer(c->device, buf, NULL);
+        return 0;
+    }
+    memcpy(keep, (const void *)(uintptr_t)lo, n);
+    VkMemoryMapPlacedInfoEXT pl = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_PLACED_INFO_EXT, .pPlacedAddress = (void *)(uintptr_t)lo};
+    VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .pNext = &pl, .flags = VK_MEMORY_MAP_PLACED_BIT_EXT,
+                             .memory = mem, .offset = 0, .size = n};
+    void *at = NULL;
+    if (p_map2(c->device, &mi, &at) != VK_SUCCESS || at != (void *)(uintptr_t)lo) {
+        // A failed placed map leaves the range as it was, except one that mapped elsewhere
+        if (at) { VkMemoryUnmapInfoKHR ui = {.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = mem}; p_unmap2(c->device, &ui); }
+        free(keep);
+        vkFreeMemory(c->device, mem, NULL);
+        vkDestroyBuffer(c->device, buf, NULL);
+        return 0;
+    }
+    memcpy((void *)(uintptr_t)lo, keep, n);
+    free(keep);
+    plat_mem_unarm(lo, n);   // the new pages are writable and unwatched: written, until the next query arms them
+    r->import_lo = lo, r->import_hi = hi, r->buf = buf, r->mem = mem, r->placed = 1;
+    plat_inc32(&n_imports);
+    return 1;
+}
+
+// The pool is gone and the GPU done with it: ordinary memory with the pool's bytes goes back under the range.
+static void placed_release(VkCtx *c, PoolRec *r) {
+    uint64_t lo = r->import_lo, n = r->import_hi - r->import_lo;
+    uint8_t *keep = malloc(n);
+    if (!keep) rt_fatal("vk: out of memory releasing a placed pool");
+    memcpy(keep, (const void *)(uintptr_t)lo, n);
+    VkMemoryUnmapInfoKHR ui = {.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .flags = VK_MEMORY_UNMAP_RESERVE_BIT_EXT,
+                               .memory = r->mem};
+    if (p_unmap2(c->device, &ui) != VK_SUCCESS || !plat_mem_commit(lo, n))
+        rt_fatal("vk: placed pool %#llx+%#llx: its range could not be given back", (unsigned long long)lo, (unsigned long long)n);
+    memcpy((void *)(uintptr_t)lo, keep, n);
+    free(keep);
+    plat_mem_unarm(lo, n);
+    r->placed = 0;
+}
+
 // CPU-visible storage: the guest pages themselves become the buffer's memory (VK_EXT_external_memory_host).
 static int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
+    if (placed_on && placed_pool(c, r, addr, size)) return 1;
     if (shadow_on) return shadow_pool(c, r, addr, size);
     if (!p_host_props)
         p_host_props = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c->device, "vkGetMemoryHostPointerPropertiesEXT");
@@ -229,6 +321,7 @@ static PoolRec *phys_find(const pool_t *key) {
 }
 
 static void destroy_rec(VkCtx *c, PoolRec *r) {
+    if (r->placed) placed_release(c, r);
     if (r->mbuf) vmaDestroyBuffer(c->vma, r->mbuf, r->malloc_);
     if (r->salloc) vmaDestroyBuffer(c->vma, r->buf, r->salloc), r->buf = VK_NULL_HANDLE;
     if (r->buf) vkDestroyBuffer(c->device, r->buf, NULL);
@@ -393,7 +486,7 @@ int vk_mem_resolve(uint64_t addr, uint64_t size, VkMemSpan *out) {
         out->cls = h->cls;
         out->pool = h->pool;
         if (h->alloc) out->alloc_offset = out->offset;
-        if (shadow_on && h->pool && !((PoolRec *)h->pool)->stouched) shadow_touch(h->pool);
+        if (shadow_on && h->pool && ((PoolRec *)h->pool)->smap && !((PoolRec *)h->pool)->stouched) shadow_touch(h->pool);
         if (resolve_check_on()) {
             VkMemSpan s;
             if (!resolve_locked(addr, size, &s) || memcmp(&s, out, sizeof s))
