@@ -114,6 +114,7 @@ static VkSwapchainKHR g_sc;
 static VkFormat g_sc_fmt;
 static int g_sc_hdr;                        // HDR10 (TOTK_HDR, vk_hdr.c): PQ code values in Rec. 2020
 static VkExtent2D g_sc_ext;
+static int g_sc_rotated;   // Android: the swapchain is not in the panel's orientation (create_swapchain)
 static int g_scaler;                        // the last present: 0 the game image 1:1, 1 scaled by the blit, 2 by FSR
 static uint32_t g_sc_n;
 static VkImage g_sc_img[MAX_IMAGES];
@@ -283,7 +284,7 @@ static void flip_locked(void) {
     VkResult r = vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
     vk_queue_unlock();
     vk_device_fault_report(r);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || (r == VK_SUBOPTIMAL_KHR && !g_sc_rotated)) plat_xchg32(&g_dirty, 1);
 }
 
 static void free_capture(void) {
@@ -296,7 +297,7 @@ static void free_capture(void) {
 }
 
 // Returns 1 with a usable swapchain, 0 when the window has no area (minimised). Called with g_pl held.
-static int create_swapchain(void) {
+static int build_swapchain(void) {
     flip_locked();   // the acquired image goes out before its swapchain is replaced
     VkCtx *c = vk_ctx();
     VkSurfaceCapabilitiesKHR caps;
@@ -305,6 +306,26 @@ static int create_swapchain(void) {
     wsys_client_size(&cw, &ch);
     VkExtent2D ext = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent
                                                             : (VkExtent2D){(uint32_t)cw, (uint32_t)ch};
+    VkSurfaceTransformFlagBitsKHR pre = caps.currentTransform;
+#ifdef __ANDROID__
+    // The AYN Thor's panel is portrait: in landscape the surface reports the window's extent (1920x1080) with
+    // ROTATE_90. A swapchain with that transform tells the compositor its images are already turned for the panel, so
+    // the landscape frame came out turned a quarter and squeezed. With the identity transform the compositor turns it;
+    // every present then returns VK_SUBOPTIMAL_KHR, which must not rebuild the swapchain (g_sc_rotated).
+    // The surface's extent can lag the window: after immersive mode took the system bars away it still gave 1920x970
+    // for a 1920x1080 window, and the frame got black bars. Android takes any extent in the caps' range.
+    if (cw > 0 && ch > 0) {
+        ext.width = (uint32_t)cw < caps.minImageExtent.width ? caps.minImageExtent.width
+                  : (uint32_t)cw > caps.maxImageExtent.width ? caps.maxImageExtent.width : (uint32_t)cw;
+        ext.height = (uint32_t)ch < caps.minImageExtent.height ? caps.minImageExtent.height
+                   : (uint32_t)ch > caps.maxImageExtent.height ? caps.maxImageExtent.height : (uint32_t)ch;
+    }
+    g_sc_rotated = 0;
+    if (pre != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR && (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)) {
+        pre = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        g_sc_rotated = 1;
+    }
+#endif
     if (!ext.width || !ext.height) return 0;
     uint32_t nf = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(c->phys, g_surface, &nf, NULL);
@@ -331,7 +352,7 @@ static int create_swapchain(void) {
         .imageFormat = sf.format, .imageColorSpace = sf.colorSpace, .imageExtent = ext, .imageArrayLayers = 1,
         .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,   // every surface supports it (the menu overlay draws into it)
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = pre,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = pick_present_mode(c->phys), .clipped = VK_TRUE,
         .oldSwapchain = old};
     VkResult r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
@@ -351,6 +372,11 @@ static int create_swapchain(void) {
     g_sc_hdr = hdr;
     vk_hdr_set_active(hdr);
     if (hdr) vk_hdr_metadata(g_sc, 1);
+    if (ext.width != g_sc_ext.width || ext.height != g_sc_ext.height)
+        rt_log("gfx: swapchain %ux%u for a %dx%d window (surface %ux%u, %ux%u..%ux%u, transform 0x%x, used 0x%x)",
+               ext.width, ext.height, cw, ch, caps.currentExtent.width, caps.currentExtent.height,
+               caps.minImageExtent.width, caps.minImageExtent.height, caps.maxImageExtent.width,
+               caps.maxImageExtent.height, (unsigned)caps.currentTransform, (unsigned)pre);
     g_sc_ext = ext;
     g_sc_n = MAX_IMAGES;
     vkGetSwapchainImagesKHR(c->device, g_sc, &g_sc_n, g_sc_img);
@@ -364,8 +390,17 @@ static int create_swapchain(void) {
     }
     free_capture();
     vk_queue_unlock();
-    plat_xchg32(&g_dirty, 0);
     return 1;
+}
+
+// g_dirty is cleared before the window's size is read, so a resize that arrives during the build marks the new
+// swapchain stale: cleared after it, the resize was lost and on Android the swapchain kept the 1920x970 the window had
+// before immersive mode hid the system bars. A failed build leaves it set for the next frame.
+static int create_swapchain(void) {
+    plat_xchg32(&g_dirty, 0);
+    int ok = build_swapchain();
+    if (!ok) plat_xchg32(&g_dirty, 1);
+    return ok;
 }
 
 static void sync_barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 s0,
@@ -578,7 +613,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     }
     vk_device_fault_report(r);
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) goto out;     // lost, not ready: skip the frame
-    if (r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
+    if (r == VK_SUBOPTIMAL_KHR && !g_sc_rotated) plat_xchg32(&g_dirty, 1);
     vkResetFences(c->device, 1, &g_fence[slot]);
     if (g_sc_hdr) vk_hdr_metadata(g_sc, 0);   // a changed peak or white goes to the display
     if (g_th_pending[slot]) {   // that fence has signalled: the thumbnail its submission wrote is complete
