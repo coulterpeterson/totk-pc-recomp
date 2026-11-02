@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "host.h"
 #include "nvn_api.h"
 #include "nvn_tex.h"
@@ -94,6 +95,20 @@ static void event_cb(void *arg) {
 static void write_counter(uint64_t addr, uint64_t counter) {
     uint64_t rec[2] = {counter, (uint64_t)((unsigned __int128)kern_now_ns() * 12 / 625)};
     memcpy((void *)(uintptr_t)addr, rec, sizeof rec);
+}
+
+// TOTK_GPU_TIME: when a timestamp report gets its time. completion (default): when the GPU has finished the submission
+// that holds it, as close to the hardware as the back end gets. record: when the replay records it, as Ryujinx stamps a
+// report when its GPU thread processes the command. The game picks its frame interval from the time between its
+// reports; at completion that time also holds the replay and the queue, and on the AYN Thor (Turnip) it chose three
+// vsyncs for every frame outdoors (20 fps) where at record time it chose two (28 fps). The Android profile sets record.
+static int gpu_time_at_record(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = !strcmp(cfg_value("TOTK_GPU_TIME"), "record");
+        if (on) rt_log("vk: timestamp reports take the time the replay records them (TOTK_GPU_TIME=record)");
+    }
+    return on;
 }
 
 static void counter_cb(void *arg) {
@@ -283,6 +298,7 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
         rt_fatal("vk: counter report at %#llx is in no memory pool", (unsigned long long)p->addr);
     vk_mem_count(m.cls, VK_MUSE_GPU_WRITE, sizeof(NVNcounterData));
     if (samples) oq_report(ex, p->addr);
+    else if (gpu_time_at_record()) write_counter(p->addr, 0);
     else {
         uint64_t *a = malloc(sizeof *a);
         if (!a) rt_fatal("vk: out of memory");
