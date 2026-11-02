@@ -102,7 +102,28 @@ must check the slot is still empty when it creates each guest thread.
      29.3 fps over the second half (1% lows 19-23 fps), memory mappings level at about 35,000 of 65,530, and 101,615
      preemptions taken in guest code. Textures are re-uploaded 22 times per 60 frames (2.4 MiB), where the lifted
      build with placed pools has none: to look at in milestone 4.
-4. **Measure.** The same four-minute runs and critical-path recordings as the lifted build, in both power modes.
+4. **Measure** (done, 2026-11-02; performance mode, 120 Hz, uncapped, asynchronous replay, the save outdoors).
+   - CPU: 30 s per build, per-thread CPU time over frames presented. Native: 36 fps, main thread 6.9 ms a frame,
+     the five game workers 4.5-6.1 ms. Lifted: 40 fps, main thread 8.2 ms, workers 5.9-7.2 ms. Native execution
+     takes 15-25% off the game threads' CPU; the frame rate is within the runs' spread (30-40 fps either way).
+   - Neither build keeps its game threads busy (the main thread uses about 7-8 ms of a 25-28 ms frame), yet the
+     critical path counts 15 ms of it as running. An off-CPU profile of the native main thread finds the gap: of its
+     wall time, 41% guest waits (SVCs, core given up), 36% `nvnSyncWait`, and inside that 21.5% (about 6 ms a frame)
+     after the fence was reached, in `vk_be_cpu_synced` -> `vk_texture_write_back_small`. That copies small
+     GPU-rendered targets back to guest memory (TotK reads its grass map from CPU memory without an invalidate),
+     one GPU copy and fence wait per target, each queued behind the GPU's current frame, with the core still held.
+   - With that write-back off (`wb_fence_limit = 0`, a diagnostic: grass cutting needs it) the frame rate does not
+     move (35.4 fps): the critical path's running time falls from 26.7 to 14.1 ms and its time waiting for the GPU
+     rises from 1.1 to 8.7 ms. The write-back overlaps a wait the game makes anyway.
+   - So the frame is bound by the graphics pipeline, not by game code: the game waits for GPU fences whose completion
+     includes the replay (10-11 ms of CPU on the replay thread, 7.5 ms on the recorder) and the GPU (17-19 ms).
+     Half render scale takes the GPU from 19.4 to 17.1 ms and adds about 1 fps: most GPU time does not scale with
+     resolution.
+   - Texture re-uploads are no native regression: the lifted build re-uploads 27-29 a 60-frame window under the same
+     settings, the native build 6-8 in its 30-minute run.
+   - Next, in order: the replay's latency and throughput (the GPU starts a frame's work only as the replay hands
+     parts over), the write-back as copies recorded with the work that renders those targets (no extra GPU round
+     trip at the fence), then GPU work that does not scale with resolution ([android-plan.md](android-plan.md)).
 
 ## What to expect
 
