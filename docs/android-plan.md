@@ -49,25 +49,25 @@ Done, and how it was checked:
   (standard power holds the prime core at 1.84 of 3.19 GHz). Opening 64 KiB a fault instead of 4 KiB cut the faults by
   only 12% and doubled the replay's uploads, so it was dropped. Runs of the same save differ by up to 4 fps.
 
-- Critical path (`TOTK_CRIT` with `tools/crit_path.py`, outdoors, Turnip): about 37 ms of a 43 ms frame is the game's
-  presenting thread inside `nvnQueueSubmitCommands`, i.e. our replay; the game's main thread is about 5 ms of it. On
-  that thread: draw preparation about 60% (`bind_resources` about 22%), splitting submissions with the shadow sync
-  about 14%, write-watch queries about 7%. The game's other threads spend about a third of their time in the
-  write-watch fault path (signal, `mprotect`).
-- Placed pools (`placed = 1`, VK_EXT_map_memory_placed on Turnip) remove the shadow sync and the working set fell from
-  4.0 to 2.9 GB, but the game stopped 4-6 s into play in every run (all threads in futex waits, the GPU's writes to
-  CPU-visible memory no longer completing), so they are off by default.
+- Placed pools (VK_EXT_map_memory_placed on Turnip) work since the write watch tracks them in 64 KiB units: the stop
+  was the process running out of memory mappings (65530), because the kernel never merges the driver's mappings
+  after page-sized protection changes. Five minutes outdoors on the player's save, second half counted: placed pools
+  29.9 fps (33 of 36 four-second windows at 30), no texture re-uploads, replay 11.6 ms, GPU 21.1 ms, 3.0 GB; shadow
+  storage 26.7 fps, 54 re-uploads (50 MiB) every 60 frames, 4.0 GB. `hang_report = <s>` logs every guest thread's
+  wait and host stack when presents stop.
+- Uncapped (`fps_limit = 60`, `realtime = 1`) it stays at 30: the critical path is the presenting thread's replay,
+  about 26 ms of a 31 ms frame, then the main thread's game code about 4 ms; the GPU needs about 21 ms. The replay's
+  own time is spread out: `bind_resources` 9%, the uniform snapshots (`put`, `vk_usnap_find`) 10%, kernel 11%, locks
+  4.5%, memcmp and memcpy 6%.
 
 Open, in order:
-0. The placed-pool stop: record the stopped process's threads (TOTK_CRIT ending at the stop, or a hang reporter that
-   logs each guest thread's wait), then fix it; it is the largest single cut in the replay found so far.
-1. The replay's draw preparation: `bind_resources`, `vk_usnap_find`, `shader_for`, the texture lookups, per draw.
-2. The write watch's faults on the game's threads: which pools they hit and whether those need tracking.
-3. Stutter: one-off windows at 12-24 fps (texture uploads after loading, the second screen's focus); the focus is now
-   taken from the app's lifecycle (not yet seen working on the Thor).
-4. 60 fps: the frame-rate patch and the real-time step exist, but 1.0.0's table lacks the equipment cooldown fix the
-   real-time step needs, and a frame must fit in 16.7 ms; then the Thor's performance mode and 120 Hz.
-5. A save importer in tools/ (the version-patched copy of an Eden 1.4.2 save loads).
+0. 60 fps needs the replay under about 12 ms and the GPU under 16.7 ms:
+   - the replay: record a submission's command buffers on more than one thread (secondary command buffers), and cut
+     the per-draw work (resource binding, the snapshot lookups, the locks);
+   - the GPU at 1280x720: where its 21 ms go (softfloat64, the passes the game draws), with Turnip's own counters.
+1. Start-up stutter: textures streamed in during the first minute are deswizzled on the CPU on the presenting thread.
+2. 1.0.0's patch table: the equipment cooldown fix the real-time step needs, before 60 fps can be the default.
+3. The second screen's focus (not seen working yet), the Thor's performance mode and 120 Hz, a save importer.
 
 ## 0. Starting point
 
