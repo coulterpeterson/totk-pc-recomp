@@ -49,14 +49,25 @@ Done, and how it was checked:
   (standard power holds the prime core at 1.84 of 3.19 GHz). Opening 64 KiB a fault instead of 4 KiB cut the faults by
   only 12% and doubled the replay's uploads, so it was dropped. Runs of the same save differ by up to 4 fps.
 
+- Critical path (`TOTK_CRIT` with `tools/crit_path.py`, outdoors, Turnip): about 37 ms of a 43 ms frame is the game's
+  presenting thread inside `nvnQueueSubmitCommands`, i.e. our replay; the game's main thread is about 5 ms of it. On
+  that thread: draw preparation about 60% (`bind_resources` about 22%), splitting submissions with the shadow sync
+  about 14%, write-watch queries about 7%. The game's other threads spend about a third of their time in the
+  write-watch fault path (signal, `mprotect`).
+- Placed pools (`placed = 1`, VK_EXT_map_memory_placed on Turnip) remove the shadow sync and the working set fell from
+  4.0 to 2.9 GB, but the game stopped 4-6 s into play in every run (all threads in futex waits, the GPU's writes to
+  CPU-visible memory no longer completing), so they are off by default.
+
 Open, in order:
-0. The cross-thread chain of a frame: which guest waits the main thread's 300 switches are, and the wake-up latency of
-   the kernel's synchronisation objects on Android (the runtime's spin options were tuned on desktops).
-1. The write watch's faults: which pools they hit, whether those pools need tracking at all, or a cheaper detection
-   (soft-dirty bits, if the app may clear them).
-2. 60 fps: the frame-rate patch and the real-time step exist (the PC build runs 60), but 1.0.0's table lacks the
-   equipment cooldown fix the real-time step needs, and a frame has to fit in 16.7 ms first.
-3. A save importer in tools/; the Thor's performance mode and 120 Hz once the work above is done.
+0. The placed-pool stop: record the stopped process's threads (TOTK_CRIT ending at the stop, or a hang reporter that
+   logs each guest thread's wait), then fix it; it is the largest single cut in the replay found so far.
+1. The replay's draw preparation: `bind_resources`, `vk_usnap_find`, `shader_for`, the texture lookups, per draw.
+2. The write watch's faults on the game's threads: which pools they hit and whether those need tracking.
+3. Stutter: one-off windows at 12-24 fps (texture uploads after loading, the second screen's focus); the focus is now
+   taken from the app's lifecycle (not yet seen working on the Thor).
+4. 60 fps: the frame-rate patch and the real-time step exist, but 1.0.0's table lacks the equipment cooldown fix the
+   real-time step needs, and a frame must fit in 16.7 ms; then the Thor's performance mode and 120 Hz.
+5. A save importer in tools/ (the version-patched copy of an Eden 1.4.2 save loads).
 
 ## 0. Starting point
 
