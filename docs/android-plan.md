@@ -29,15 +29,23 @@ Done, and how it was checked:
   streaks), the swapchain in the identity transform (the panel is portrait) and rebuilt after the resize to immersive
   mode, the process ended when the game returns, TMPDIR set, resumable data pushes for wireless debugging.
 
+- Outdoors on the player's own save (an Eden 1.4.2 save; its header's version set to 1.0.0's, `0x0046C3C8`, it loads):
+  Qualcomm's driver 0676.53 draws black tiles over moving characters and trees that change from frame to frame and
+  crashed once in its pipeline compiler; neither BC decoding, the subgroup size nor the feedback-loop path explains
+  them. With the player's Turnip v26.0.0 R8 in `gpu_driver/`, loaded through libadrenotools, the frame is clean.
+- Speed there, Turnip: 20 fps in the game's whole-vsync steps (every frame 3 vsyncs). No thread is busy (the busiest
+  39% of a core after the window thread's SDL polling was fixed). The frame is replay (about 17 ms) then GPU (about
+  27 ms) one after the other, about 43 ms, rounded up to 50. Asynchronous replay (`replay_async = 1`) frees the game's
+  submitting thread but does not shorten that chain; the real-time step gives about 23 fps but needs the equipment
+  cooldown fix 1.0.0's patch table lacks.
+
 Open, in order:
-0. Play outdoors on the Thor (Great Sky Island, the surface) and read the perf lines (`trace = perf` in totk.ini):
-   the cave is a light scene. Then the same with a Turnip build in `gpu_driver/` (`tools/install_android.py
-   --gpu-driver`); whether its own dependencies load without libadrenotools' linker namespace help is open.
-1. 60 fps: the Android profile caps at 30 (FPS_LIMIT). The render thread's 18-20 ms and the GPU's 20 ms leave no room
-   for 16.7 ms frames yet; the replay (NVN to Vulkan, about 17 ms here) is the first thing to look at.
-2. Window lifecycle: done in code (surface released going to the background, made again on return), untested on a
-   device. adb's injected key events do not reach the game; the Thor's own controls appear as an Xbox pad.
-3. Depth clip control stays required; Qualcomm's driver has it.
+0. Get replay plus GPU under 33 ms: find whether the GPU starts on a frame's first parts while the replay records the
+   rest, or only after it; then the replay's own cost (bind_resources, vk_usnap_find, memcpy in the profile) and the
+   GPU's (27 ms at 1280x720 is slow for an Adreno 740: softfloat64, timing gaps between parts).
+1. A save importer in tools/ (the header patch above, written as the app's user with run-as).
+2. The Thor's 120 Hz mode: frames of 41.7 ms (5 vsyncs) instead of 50 when a frame misses 33.
+3. Window lifecycle on a device; depth clip control stays required (Qualcomm's driver and Turnip have it).
 
 ## 0. Starting point
 
