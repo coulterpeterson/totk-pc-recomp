@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from build_game import work_dir
@@ -54,13 +55,58 @@ def make_dir(serial, path):
     made.update(dirs)
 
 
+PIECE = 256 << 20
+
+
 def push(serial, src, dst):
     if remote_size(serial, dst) == src.stat().st_size:
         print(f'  up to date: {dst}')
         return
     make_dir(serial, dst.rsplit('/', 1)[0])
     print(f'  {src.name} ({src.stat().st_size / (1 << 20):,.1f} MiB) -> {dst}', flush=True)
-    adb(serial, 'push', src, dst)
+    if src.stat().st_size > PIECE:
+        push_resumable(serial, src, dst)
+    else:
+        adb(serial, 'push', src, dst)
+
+
+def push_resumable(serial, src, dst):
+    """A large file in PIECE-sized appends, each a stream into `cat >>` on the device. adb push deletes what it wrote
+    when the connection drops, which over wireless debugging lost gigabytes of romfs.bin at a time; this keeps what
+    arrived and goes on from the last whole MiB after reconnecting."""
+    size, failures = src.stat().st_size, 0
+    q = shlex.quote(dst)
+    while True:
+        try:
+            have = remote_size(serial, dst)
+            if have == size:
+                return
+            start = max(have, 0) // (1 << 20) << 20 if 0 <= have < size else 0
+            adb(serial, 'shell', f'truncate -s {start} {q}')
+            n = min(PIECE, size - start)
+            print(f'    {start / (1 << 20):,.0f} of {size / (1 << 20):,.0f} MiB', flush=True)
+            cmd = ['adb'] + (['-s', serial] if serial else []) + ['exec-in', f'cat >> {q}']
+            with open(src, 'rb') as f, subprocess.Popen(cmd, stdin=subprocess.PIPE) as p:
+                f.seek(start)
+                left = n
+                while left:
+                    block = f.read(min(left, 1 << 20))
+                    p.stdin.write(block)
+                    left -= len(block)
+                p.stdin.close()
+                if p.wait():
+                    raise subprocess.CalledProcessError(p.returncode, cmd)
+            if remote_size(serial, dst) <= start:
+                raise RuntimeError('the piece did not arrive')
+            failures = 0
+        except (OSError, subprocess.CalledProcessError, RuntimeError) as e:
+            failures += 1
+            if failures > 20:
+                sys.exit(f'{dst}: giving up after {failures} failures ({e})')
+            print(f'    interrupted ({e}); retrying', flush=True)
+            if serial and ':' in serial:   # a wireless debugging address: reconnect to it
+                subprocess.run(['adb', 'connect', serial], capture_output=True)
+            time.sleep(10)
 
 
 def main():
