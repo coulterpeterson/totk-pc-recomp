@@ -86,10 +86,23 @@ Done, and how it was checked:
   each, one after the other), 2.6 ms waits for a virtual core, 1.8 ms wake latency and 0.6 ms sleep. The replay is off
   the path and the game does not wait for a vsync. Holding the game's interval controller at 1 would not shorten the
   frame. 60 fps needs the game code on that chain about twice as fast.
+- What those six threads spend their time on (12 s of cpu-cycles with call graphs, the threads named by the critical
+  path's recording, same settings): 63% lifted game code, 14% our runtime (`rt_dispatch` 4%, `hostfn_entry` 2%,
+  `vslow_s` 2%: vector float ops with a NaN lane redone lane by lane, which an ARM host could compute natively), 13%
+  kernel, 7% clock reads (mostly the `trace = sched` accounting the measurement itself turns on). No guest function is
+  above 1.5%. Per instruction, 29% of the lifted code's samples are loads and stores of the guest registers in the
+  `Cpu` (general registers 17%, vector registers 9%, FPCR and the rest 3%): registers outside a function's six locals,
+  syncs at calls, and every vector register, which never has a local. `Cpu *restrict c` changes no instruction (clang
+  does not use it against guest pointers made from integers once `c` has escaped to a call). The lifted code is 163 MiB
+  for 91 MiB of guest modules, code and data together: about 3x the instructions of the original.
+- So a cheaper lifter can take perhaps 10-15% off the chain (vector registers and FPCR in locals, native NaN lanes,
+  a faster `rt_dispatch`), which makes 35-40 fps at 120 Hz possible, not 60. Twice as fast needs the game's own ARM64
+  code to run as it is (native execution, "2. CPU" item 5), and 60 fps also needs the GPU's 21 ms under 16.7.
 
 Open, in order:
-1. Game code speed on the chain: profile the main thread and its five workers by lifted function, read the generated
-   code of the hottest, then the levers in "2. CPU" item 4 (guest arguments in host registers at calls, PGO).
+1. Game code speed on the chain, for 40 fps at 120 Hz: vector registers and FPCR in function locals (`recomp/regs.py`),
+   vector NaN lanes on the host's own instructions on ARM hosts (`runtime/simd_fp.h`), `rt_dispatch`. For 60 fps:
+   native execution of the guest code ("2. CPU" item 5), a separate project.
 2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
