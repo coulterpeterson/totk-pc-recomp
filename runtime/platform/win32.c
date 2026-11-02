@@ -580,7 +580,8 @@ int plat_mem_decommit(uint64_t addr, uint64_t n) { return VirtualFree((void *)(u
 
 int plat_mem_protect(uint64_t addr, uint64_t n, int prot) {
     DWORD old;
-    DWORD p = prot == PLAT_PROT_RW ? PAGE_READWRITE : prot == PLAT_PROT_READ ? PAGE_READONLY : PAGE_NOACCESS;
+    DWORD p = prot == PLAT_PROT_RW ? PAGE_READWRITE : prot == PLAT_PROT_READ ? PAGE_READONLY
+            : prot == PLAT_PROT_RX ? PAGE_EXECUTE_READ : PAGE_NOACCESS;
     return VirtualProtect((void *)(uintptr_t)addr, n, p, &old) != 0;
 }
 
@@ -595,7 +596,8 @@ int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
     if (mbi.State == MEM_RESERVE) return PLAT_MEM_RESERVED;
     if (mbi.State != MEM_COMMIT) return PLAT_MEM_FREE;
     DWORD p = mbi.Protect & 0xff;
-    return p == PAGE_READWRITE ? PLAT_PROT_RW : p == PAGE_READONLY ? PLAT_PROT_READ : PLAT_PROT_NONE;
+    return p == PAGE_READWRITE ? PLAT_PROT_RW : p == PAGE_READONLY ? PLAT_PROT_READ
+         : p == PAGE_EXECUTE_READ ? PLAT_PROT_RX : PLAT_PROT_NONE;
 }
 
 // Adapted from LAS Recomp runtime/platform/windows.c:40-63 @ da35b83 (MIT, Copyright (c) 2026 Peiikai): GetWriteWatch

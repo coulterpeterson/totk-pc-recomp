@@ -49,6 +49,9 @@ typedef struct {
     uint64_t kinds[K_COUNT], sym_import, sym_own;
     uint32_t imports, import_to[MOD_COUNT], weak_unresolved, strong_unresolved;
     uint32_t init_off;
+#ifdef RT_NATIVE
+    uint64_t patch_off, key_page_off;   // the rewritten image (native.c): key page and patch area behind image and bss
+#endif
 } Mod;
 
 static Mod mods[MOD_COUNT];
@@ -273,15 +276,89 @@ static uint64_t decode_ctor_flag(const Mod *m) {
     return 0;
 }
 
+#ifdef RT_NATIVE
+// ---- native execution (native.c): the images tools/native/rewrite.py wrote, in <ExeFS>/../native. Each is the
+// module's image and bss with its guest instructions that touch x18, TPIDR_EL0, TPIDRRO_EL0, CNTPCT_EL0 or an SVC
+// rewritten, a 16 KiB key page and the patch area; <module>.fixups.tsv gives the offsets, <module>.gates.tsv the SVC
+// sites.
+// empty_ok: an empty file (a module without SVC sites has an empty gates.tsv) reads as ""
+static char *read_text(const char *dir, const char *name, const char *suffix, int empty_ok) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s/../native/%s.%s", dir, name, suffix);
+    size_t len = 0;
+    uint8_t *d = read_file(path, &len);
+    if (!d && empty_ok && plat_file_exists(path)) return calloc(1, 1);
+    if (!d) rt_fatal("loader: cannot read %s (tools/native/rewrite.py writes it)", path);
+    char *s = malloc(len + 1);
+    if (!s) rt_fatal("loader: %s: allocation", path);
+    memcpy(s, d, len);
+    s[len] = 0;
+    free(d);
+    return s;
+}
+
+static uint64_t fixup(const char *text, const char *name, const char *key) {
+    char want[64];
+    snprintf(want, sizeof want, "# %s\t", key);
+    const char *p = strstr(text, want);
+    if (!p) rt_fatal("loader: %s.fixups.tsv has no %s", name, key);
+    return strtoull(p + strlen(want), NULL, 16);
+}
+
+static void native_overlay(Mod *m, const char *dir, const RtLayoutEntry *lay, const Seg seg[3]) {
+    char *fx = read_text(dir, lay->name, "fixups.tsv", 0);
+    m->patch_off = fixup(fx, lay->name, "PATCH_OFF");
+    m->key_page_off = fixup(fx, lay->name, "KEY_PAGE_OFF");
+    if (fixup(fx, lay->name, "TEXT_END") != seg[0].mem_off + seg[0].size || fixup(fx, lay->name, "RO_OFF") != seg[1].mem_off ||
+        fixup(fx, lay->name, "DATA_OFF") != seg[2].mem_off)
+        rt_fatal("loader: %s.fixups.tsv does not describe this ExeFS's %s", lay->name, lay->name);
+    free(fx);
+    char path[1024];
+    snprintf(path, sizeof path, "%s/../native/%s.patched.bin", dir, lay->name);
+    size_t len;
+    uint8_t *img = read_file(path, &len);
+    if (!img || len != lay->size || m->patch_off >= len)
+        rt_fatal("loader: %s is %s (%zu bytes, layout.h says %#llx)", path, img ? "the wrong size" : "missing", len,
+                 (unsigned long long)lay->size);
+    memcpy((void *)(uintptr_t)lay->base, img, len);
+    free(img);
+    // The key page: what patch_nso.py's slot sequences add to the Cpu that TLS_SLOT_APP points at, in its KEY_INDEX
+    // order K18, KTLS, KTLR, KGATE (the other four are D2R's parameter slots, unused)
+    uint64_t *key = (uint64_t *)(uintptr_t)(lay->base + m->key_page_off);
+    key[0] = offsetof(Cpu, x) + 18 * sizeof(uint64_t);
+    key[1] = offsetof(Cpu, tpidr);
+    key[2] = offsetof(Cpu, tpidrro);
+    key[3] = offsetof(Cpu, gate);
+    char *g = read_text(dir, lay->name, "gates.tsv", 1);
+    char *save = NULL;
+    for (char *line = strtok_r(g, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        unsigned long long ret, site;
+        unsigned imm;
+        char kind[16];
+        if (sscanf(line, "%llx %15s %u %llx", &ret, kind, &imm, &site) != 4 || strcmp(kind, "svc"))
+            rt_fatal("loader: %s.gates.tsv: unexpected line %s", lay->name, line);
+        native_add_svc_site(lay->base + ret, lay->base + site, imm);
+    }
+    free(g);
+}
+#endif
+
 static void load_module(Mod *m, const char *dir, const RtLayoutEntry *lay) {
     size_t len;
     uint8_t *raw = ldr_read_verified(dir, lay->name, &len);
     Seg seg[3];
     uint64_t size = nso_segments(raw, len, lay->name, seg);
+#ifdef RT_NATIVE
+    if (size > lay->size)   // the rewritten image is the module's image and bss, then its key page and patch area
+        rt_fatal("loader: %s image is %#llx bytes, more than layout.h's %#llx", lay->name, (unsigned long long)size,
+                 (unsigned long long)lay->size);
+    if (!plat_mem_commit(lay->base, lay->size))
+#else
     if (size != lay->size)
         rt_fatal("loader: %s image is %#llx bytes, layout.h says %#llx: generated C and game files differ", lay->name,
                  (unsigned long long)size, (unsigned long long)lay->size);
     if (!plat_mem_commit(lay->base, size))
+#endif
         rt_fatal("loader: cannot commit %s at %#llx", lay->name, (unsigned long long)lay->base);
     for (int i = 0; i < 3; i++) {
         if ((uint64_t)seg[i].mem_off + seg[i].size > size) rt_fatal("loader: %s segment %d exceeds the image", lay->name, i);
@@ -290,6 +367,10 @@ static void load_module(Mod *m, const char *dir, const RtLayoutEntry *lay) {
         m->seg_size[i] = seg[i].size;
     }
     free(raw);
+#ifdef RT_NATIVE
+    native_overlay(m, dir, lay, seg);
+    size = lay->size;
+#endif
     m->pub.name = lay->name;
     m->pub.base = lay->base;
     m->pub.size = size;
@@ -435,10 +516,21 @@ static void verify_identity(void) {
     if (!identity_refs) rt_fatal("loader: no reference to nnMain to check");
 }
 
-// .text and .rodata read-only: guest code never executes from guest memory, and nothing may write them.
+// .text and .rodata read-only: guest code never executes from guest memory, and nothing may write them. Native
+// execution: .text and the patch area executable, .rodata and the key page read-only.
 static void seal(Mod *m) {
+#ifdef RT_NATIVE
+    uint64_t b = m->pub.base, ro = m->seg_off[1];
+    __builtin___clear_cache((char *)(uintptr_t)b, (char *)(uintptr_t)(b + ro));
+    __builtin___clear_cache((char *)(uintptr_t)(b + m->patch_off), (char *)(uintptr_t)(b + m->pub.size));
+    if (!plat_mem_protect(b, ro, PLAT_PROT_RX) || !plat_mem_protect(b + ro, m->pub.data_off - ro, PLAT_PROT_READ) ||
+        !plat_mem_protect(b + m->key_page_off, 0x4000, PLAT_PROT_READ) ||
+        !plat_mem_protect(b + m->patch_off, m->pub.size - m->patch_off, PLAT_PROT_RX))
+        rt_fatal("loader: cannot seal %s", m->pub.name);
+#else
     if (!plat_mem_protect(m->pub.base, m->pub.data_off, PLAT_PROT_READ))
         rt_fatal("loader: cannot seal %s", m->pub.name);
+#endif
 }
 
 void ldr_load(const char *exefs_dir) {
@@ -458,6 +550,9 @@ void ldr_load(const char *exefs_dir) {
     }
     verify_identity();
     for (int i = 0; i < nmods; i++) seal(&mods[i]);
+#ifdef RT_NATIVE
+    native_init();
+#endif
     for (int i = 0; i < nmods; i++) {
         const Mod *m = &mods[i];
         rt_log("loaded %-8s at %#llx size %#llx: %llu relocations, %u imports", m->pub.name,

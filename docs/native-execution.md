@@ -75,8 +75,19 @@ must check the slot is still empty when it creates each guest thread.
    divergent (`main` 93,511 trials) and catches all 300 deliberately broken blocks per module. Patch areas: `main`
    42.7 MiB, `sdk` 1.3 MiB, `subsdk0` 0.4 MiB; the modules end 137 MiB above `0x2000000000` (`main` 113 MiB, `subsdk0` 7 MiB, `sdk` 15 MiB), well below the
    kernel region.
-2. **Boot.** Loader, gate, thread entry and host thunks; the guest kernel's probes and `--boot` reach the title screen
-   on the Thor with native guest code.
+2. **Boot** (done, 2026-11-02). `runtime/native.c` holds the four transitions, in assembly: `native_run`
+   (`rt_call` and `rt_original`: host registers saved, the guest's loaded from its `Cpu`, a jump to `c->pc`),
+   `native_return` (guest code returning to `RT_RET_HOST`), and the host-function and SVC gates, which store the
+   guest registers in the `Cpu`, run the unchanged host function or `rt_svc` on the host stack, and load them back.
+   The slot block is the `Cpu` itself: `TLS_SLOT_APP` points at it and the key page holds the offsets of `x[18]`,
+   `tpidr`, `tpidrro` and the new `gate` field, so guest x18 and the TLS registers are where the host code already
+   reads them. The host-function window becomes executable, a two-word stub per host function at the address the
+   loader writes into the GOTs. The loader (`runtime/loader.c`, `RT_NATIVE`) copies each rewritten image over its
+   module, writes the key page, reads the SVC sites and seals text and patch area executable. On the Thor the game
+   boots to the title menu, and the save loads and plays outdoors (scripted input) at 30-34 fps uncapped in
+   performance mode, about what the lifted build reaches there: the critical path still has 26 ms of running a frame,
+   and the main thread uses about 9 ms of CPU a frame. Spin waits run without their gates and asynchronous
+   preemption is off, which milestone 3 adds.
 3. **Play.** Spin gates, async preemption, alternate stacks, crash reports; the save loads and plays outdoors for
    30 minutes without a stop; `hang_report` works on native threads.
 4. **Measure.** The same four-minute runs and critical-path recordings as the lifted build, in both power modes.

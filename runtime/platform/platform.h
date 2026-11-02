@@ -199,7 +199,7 @@ static inline void *plat_casp(void *volatile *p, void *xchg, void *cmp) {
 
 // ---- virtual memory: ranges reserved at fixed addresses below 2^39, their pages committed, decommitted and protected
 // at 4 KiB granularity.
-enum { PLAT_PROT_NONE, PLAT_PROT_READ, PLAT_PROT_RW };
+enum { PLAT_PROT_NONE, PLAT_PROT_READ, PLAT_PROT_RW, PLAT_PROT_RX };   // RX: guest code run natively (native.c)
 enum { PLAT_MEM_FREE = -2, PLAT_MEM_RESERVED = -1 };   // plat_mem_state besides PLAT_PROT_* for committed pages
 // Reserves [addr, addr + n) inaccessible, exactly there: 0 when any of it is taken. watch: writes to its pages are
 // tracked for plat_mem_written.

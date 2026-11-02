@@ -300,6 +300,19 @@ on their own (no game files, no SDL) and checks the address-space reservations a
 read, a frozen region, four writers against a draining reader, and the VMA count. `TOTK_WW=mprotect` forces the
 page-protection tracking that older kernels (Android before 6.7) use. The probe is also `totk --probe-mem`.
 
+Native execution on Android ([native-execution.md](native-execution.md)): the game's own ARM64 code instead of the
+lifted C. The rewritten modules, the library without generated code (`-DRT_NATIVE`), its APK, and the images in the
+data folder's `native/` beside `exefs/`:
+
+```sh
+.venv/bin/python tools/native/rewrite.py --version v0 --verify
+.venv/bin/python tools/build_game.py --version v0 --gen generated/v0-android --target android --native build/v0-native
+.venv/bin/python tools/build_apk.py --version v0 --out build/v0-android-native
+.venv/bin/python tools/install_android.py --version v0 --out build/v0-android-native --no-data
+adb shell mkdir -p /storage/emulated/0/Android/data/com.totkrecomp/files/native
+adb push build/v0-native/*.patched.bin build/v0-native/*.tsv /storage/emulated/0/Android/data/com.totkrecomp/files/native/
+```
+
 On an AArch64 host, `--probe-exec` checks what running guest code natively needs: executable memory at a fixed
 address, x18 kept around a call, and the counter and thread registers at EL0 ([native-execution.md](native-execution.md)).
 

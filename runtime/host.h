@@ -135,8 +135,13 @@ uint64_t rt_call(Cpu *c, uint64_t fn, int n, ...);         // host -> guest, sec
                                                            // as uint64_t: cast every argument. Seals the dispatch
                                                            // table on first use. Sets x30 = RT_RET_HOST, restores
                                                            // x30 and pc, returns x0. Does not touch sp
-#define RT_RET_HOST 0x70200ff000ull                        // x30 sentinel inside the host-function window; a jump to
+#define RT_RET_HOST (RT_HOSTFN_BASE + 0xff000ull)          // x30 sentinel inside the host-function window; a jump to
                                                            // it is a named fatal
+// Native execution (native.c, a build with tools/build_game.py --native): guest code runs as the game's own ARM64
+// instructions, rewritten by tools/native/rewrite.py.
+void native_init(void);                                    // the host-function window made executable
+void native_call(Cpu *c);                                  // run guest code at c->pc until it returns to RT_RET_HOST
+void native_add_svc_site(uint64_t ret, uint64_t site, uint32_t imm);   // loader: a rewritten SVC site
 
 // ---- guest memory (memory.c)
 typedef struct { uint64_t base, size; } RtRange;

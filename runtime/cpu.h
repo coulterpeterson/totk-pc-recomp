@@ -18,7 +18,9 @@ typedef struct __attribute__((aligned(16))) Cpu {
     uint64_t fpcr;           // 320: guest FPCR/FPSR (portable FP/SIMD lowering only; the asm path uses the host's)
     uint64_t fpsr;           // 328
     uint64_t excl_val_hi;    // 336: upper half of a 128-bit exclusive pair (LDXP/LDAXP of two X registers)
-    uint8_t _pad[512 - 344];
+    uint64_t gate;           // 344: native execution (native.c): the SVC gate the rewritten code calls (key KGATE)
+    uint64_t host_sp;        // 352: native execution: the host stack of the innermost native_call on this Cpu
+    uint8_t _pad[512 - 360];
     __uint128_t v[32];       // 512
 } Cpu;
 
@@ -27,6 +29,7 @@ _Static_assert(offsetof(Cpu, pc) == 264, "pc");
 _Static_assert(offsetof(Cpu, nzcv) == 272, "nzcv");
 _Static_assert(offsetof(Cpu, fpcr) == 320, "fpcr");
 _Static_assert(offsetof(Cpu, fpsr) == 328, "fpsr");
+_Static_assert(offsetof(Cpu, gate) == 344 && offsetof(Cpu, host_sp) == 352, "native execution fields");
 _Static_assert(offsetof(Cpu, v) == 512, "v");
 
 typedef void (*GuestFn)(Cpu *);

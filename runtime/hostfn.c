@@ -208,8 +208,12 @@ uint64_t rt_call(Cpu *c, uint64_t fn, int n, ...) {
     uint64_t lr = c->x[30], pc = c->pc;
     c->x[30] = RT_RET_HOST;
     c->pc = fn;
+#ifdef RT_NATIVE
+    native_call(c);   // guest code runs with the FPCR in c (native.c native_run)
+#else
     rt_fpcr_sync(c);   // guest code may start here on a host thread or fiber that has not run it
     rt_dispatch(c);
+#endif
     c->x[30] = lr;
     c->pc = pc;
     return c->x[0];
@@ -222,7 +226,11 @@ uint64_t rt_original(Cpu *c) {
     uint64_t lr = c->x[30], pc = c->pc;
     c->x[30] = RT_RET_HOST;
     c->pc = slots[i].original;
+#ifdef RT_NATIVE
+    native_call(c);
+#else
     rt_dispatch(c);
+#endif
     c->x[30] = lr;
     c->pc = pc;
     return c->x[0];

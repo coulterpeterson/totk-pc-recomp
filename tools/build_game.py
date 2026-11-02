@@ -809,6 +809,10 @@ def main():
                     help=f'build only <out>/{LIB_NAME} from runtime/ (no generated C, no totk.exe)')
     ap.add_argument('--runtime-lib', type=Path, help=f'link against this {LIB_NAME} instead of compiling runtime/ '
                                                     f'({", ".join(sorted(INSTALL_SIDE))} and modules.c still compile)')
+    ap.add_argument('--native', type=Path,
+                    help='android: build for native execution of the game\'s own code with the modules rewritten into '
+                         'this directory by tools/native/rewrite.py (its layout, no generated C; '
+                         'docs/native-execution.md). Default output build/<version>-android-native')
     ap.add_argument('--expected', type=Path,
                     help='expected hashes (default tools/data/expected-<display version>.json)')
     args = ap.parse_args()
@@ -817,7 +821,10 @@ def main():
     gen = (args.gen or ROOT / 'generated' / args.version).resolve()
     if args.target != 'x86_64' and WIN:
         sys.exit(f'--target {args.target} builds on Linux or macOS only')
-    out = (args.out or ROOT / 'build' / (args.version + ('' if args.target == 'x86_64' else '-' + args.target))).resolve()
+    if args.native and args.target != 'android':
+        sys.exit('--native builds for --target android')
+    out = (args.out or ROOT / 'build' / (args.version + ('' if args.target == 'x86_64' else '-' + args.target)
+                                          + ('-native' if args.native else ''))).resolve()
     extracted = None if args.exefs and args.romfs else work_dir() / 'extracted' / args.version
     paths = {'exefs': (args.exefs or extracted / 'exefs').resolve(),
              'romfs': (args.romfs or extracted / 'romfs').resolve(),
@@ -885,6 +892,19 @@ def main():
                      + ' (docs/building.md)')
     if not (gen / 'layout.json').is_file():
         sys.exit(f'{gen / "layout.json"} not found: run the generator first')
+    if args.native:
+        # The runtime's generated headers: the rewrite's layout (each module with its patch area) and the patch sets of
+        # the generated C (patches.h), in a directory of the build's own
+        native = args.native.resolve()
+        if not (native / 'layout.json').is_file():
+            sys.exit(f'{native / "layout.json"} not found: run tools/native/rewrite.py --version {args.version}')
+        ngen = out / 'native-gen'
+        ngen.mkdir(parents=True, exist_ok=True)
+        for f in ('layout.json', 'layout.h'):
+            write_if_changed(ngen / f, (native / f).read_text())
+        write_if_changed(ngen / 'patches.h', (gen / 'patches.h').read_text())
+        gen = ngen
+        RT_FLAGS.append('-DRT_NATIVE')
 
     layout = read_layout(gen)
     names = [n for n, _, _ in layout]
@@ -892,9 +912,9 @@ def main():
     unknown = [m for m in wanted if m not in names]
     if unknown:
         sys.exit(f'unknown modules {unknown}; the layout has {names}')
-    linked = [m for m in names if m in wanted]
-    # --make-runtime-lib builds runtime/ only, so it never reads the generated chunks
-    mods = {} if args.make_runtime_lib else {m: chunk_files(gen, m) for m in linked}
+    linked = [] if args.native else [m for m in names if m in wanted]
+    # --make-runtime-lib builds runtime/ only, so it never reads the generated chunks; nor does a native build
+    mods = {} if args.make_runtime_lib or args.native else {m: chunk_files(gen, m) for m in linked}
 
     cpus = os.cpu_count() or 1
     budget = min(MEM_BUDGET, int(total_ram() * 0.8))
@@ -918,7 +938,7 @@ def main():
     skip = {s for s in args.skip_runtime.split(',') if s}
     main_out = (ROOT / 'build' / args.version).resolve()
     pairs = None
-    if args.make_runtime_lib:
+    if args.make_runtime_lib or args.native:
         mods, linked, why = {}, [], ''
     elif args.full_build:
         why = '--full-build'

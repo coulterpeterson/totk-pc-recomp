@@ -906,7 +906,7 @@ int plat_file_list(const char *dir, const char *ext, int (*cb)(const char *name,
 
 #define PG 4096ull
 #define PS_LIMIT (1ull << 39)
-enum { PS_FREE, PS_RESERVED, PS_NONE, PS_READ, PS_RW };   // PS_NONE.. are committed: PLAT_PROT_* + PS_NONE
+enum { PS_FREE, PS_RESERVED, PS_NONE, PS_READ, PS_RW, PS_RX };   // PS_NONE.. are committed: PLAT_PROT_* + PS_NONE
 static uint8_t *pstate;
 static int ww_fd = -1, pm_fd = -1;   // userfaultfd and /proc/self/pagemap; -1 when write watch is unavailable
 static PlatMutex vm_lock = PLAT_MUTEX_INIT;   // reservations; with mp_on also the changes of watched pages
@@ -1000,7 +1000,7 @@ void *plat_mem_alloc(size_t n) {
 // With mp_on, a watched page that is logically read-write is armed (read-only) until its first write.
 static int real_prot(uint64_t addr, int prot) {
     return prot == PLAT_PROT_RW ? (mp_on && mp_watched(addr) ? PROT_READ : PROT_READ | PROT_WRITE)
-           : prot == PLAT_PROT_READ ? PROT_READ : PROT_NONE;
+           : prot == PLAT_PROT_READ ? PROT_READ : prot == PLAT_PROT_RX ? PROT_READ | PROT_EXEC : PROT_NONE;
 }
 
 int plat_mem_commit(uint64_t addr, size_t n) {

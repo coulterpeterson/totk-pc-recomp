@@ -101,6 +101,13 @@ static void table_seal(void *p, uint64_t bytes) {
 
 void rt_dispatch_init(const RtModule *mods, int count) {
     if (g_ready) rt_fatal("rt_dispatch_init called twice");
+#ifdef RT_NATIVE
+    // Native execution (native.c): no lifted functions; only the host functions are looked up, by native_hostfn_c
+    if (count == 0) {
+        __atomic_store_n(&g_ready, true, __ATOMIC_RELEASE);
+        return;
+    }
+#endif
     if (count <= 0 || count > MAX_MODULES) rt_fatal("rt_dispatch_init: %d modules", count);
 
     // Modules by base, checked for overlap.
