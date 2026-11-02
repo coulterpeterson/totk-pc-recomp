@@ -39,13 +39,24 @@ Done, and how it was checked:
   submitting thread but does not shorten that chain; the real-time step gives about 23 fps but needs the equipment
   cooldown fix 1.0.0's patch table lacks.
 
+- The 20 fps came mostly from the game's own choice: its frame interval follows the time between its GPU timestamp
+  reports, which the completion thread stamped when the GPU had finished their submission. Stamped at replay time
+  (`gpu_time = record`, the Android profile's default) the game asks for two vsyncs on every frame: 23-28 fps outdoors,
+  GPU about 24-27 ms. Asynchronous replay adds nothing there (alternating runs: 25.8/24.5 sync, 25.8/23.5 async).
+- What is left of a 39 ms frame is the game's threads waiting on each other, not any thread being busy: the main
+  thread uses about 30-40% of a core with about 300 context switches and 1400 page faults a frame (the mprotect write
+  watch; Android 13's kernel 5.15 has no asynchronous userfaultfd), on the performance cores at their full 2.8 GHz
+  (standard power holds the prime core at 1.84 of 3.19 GHz). Opening 64 KiB a fault instead of 4 KiB cut the faults by
+  only 12% and doubled the replay's uploads, so it was dropped. Runs of the same save differ by up to 4 fps.
+
 Open, in order:
-0. Get replay plus GPU under 33 ms: find whether the GPU starts on a frame's first parts while the replay records the
-   rest, or only after it; then the replay's own cost (bind_resources, vk_usnap_find, memcpy in the profile) and the
-   GPU's (27 ms at 1280x720 is slow for an Adreno 740: softfloat64, timing gaps between parts).
-1. A save importer in tools/ (the header patch above, written as the app's user with run-as).
-2. The Thor's 120 Hz mode: frames of 41.7 ms (5 vsyncs) instead of 50 when a frame misses 33.
-3. Window lifecycle on a device; depth clip control stays required (Qualcomm's driver and Turnip have it).
+0. The cross-thread chain of a frame: which guest waits the main thread's 300 switches are, and the wake-up latency of
+   the kernel's synchronisation objects on Android (the runtime's spin options were tuned on desktops).
+1. The write watch's faults: which pools they hit, whether those pools need tracking at all, or a cheaper detection
+   (soft-dirty bits, if the app may clear them).
+2. 60 fps: the frame-rate patch and the real-time step exist (the PC build runs 60), but 1.0.0's table lacks the
+   equipment cooldown fix the real-time step needs, and a frame has to fit in 16.7 ms first.
+3. A save importer in tools/; the Thor's performance mode and 120 Hz once the work above is done.
 
 ## 0. Starting point
 
