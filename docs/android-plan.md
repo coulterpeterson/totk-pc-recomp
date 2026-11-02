@@ -107,11 +107,21 @@ Done, and how it was checked:
   30 fps either way. About 1%, within the runs' noise.
 - What else is on the critical path besides running: waits for a virtual core 2.0-2.5 ms, wake latency 1.8-2.0 ms,
   the main thread in host calls 1.4-2.0 ms. 40 fps (25 ms) needs about 8 ms off the 33.
+- Those waits, measured (2026-11-02): about 40 address-arbiter and 18 lock hand-offs a frame, median wake latency
+  22 us, and 65% of them end within 50 us of the waiter going to sleep. The core waits come from the Switch's three
+  cores: the other p44 game threads and a p32 thread hold them meanwhile. The host time is all `nvnSyncWait`: the main
+  thread waiting for the GPU. `wait_spin = 50` (`runtime/kernel.c` spin_unlocked: spin for the wake, then for G,
+  without the futex call for a spinning waiter) took wake latency from 2.21 to 1.27 ms a frame and core waits from 2.79
+  to 2.52 (three alternating pairs), but the game threads' running time rose from 26.0 to 27.1 ms and the interval
+  stayed 33.4 ms. It stays a setting, off by default.
+- In every configuration so far the interval settles near 33.3 ms, and what the critical path saves in one kind of
+  time reappears in another. The only faster runs (29.5-30 ms, 33-34 fps) were the first run after the device sat
+  idle, so the CPU's clock and temperature are likely a large part of the difference between runs. Next: log the
+  clocks and temperature through a run, and compare performance mode.
 
 Open, in order:
-1. Game code speed on the chain, for 40 fps at 120 Hz: vector registers and FPCR in function locals (`recomp/regs.py`),
-   vector NaN lanes on the host's own instructions on ARM hosts (`runtime/simd_fp.h`), `rt_dispatch`. For 60 fps:
-   native execution of the guest code ("2. CPU" item 5), a separate project.
+1. The device's clocks and temperature through a run, then performance mode: the runs' spread may be thermal.
+   For 60 fps: native execution of the guest code ("2. CPU" item 5), a separate project.
 2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.

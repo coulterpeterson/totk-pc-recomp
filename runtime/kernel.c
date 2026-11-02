@@ -64,6 +64,7 @@ struct RtThread {
     PlatCond cv;
     // current wait
     int wkind, woke;
+    int spinning;              // in a wait_spin without G (kernel.c spin_unlocked): a wake needs no futex call
     uint64_t waddr, wkey;
     uint32_t wtag, wres;
     uint64_t wseq;             // registration order: equal priority wakes first come first
@@ -236,7 +237,7 @@ static void wake(RtThread *t, uint32_t res) {
     t->waker = tcur ? tcur->handle : 0;
     if (rt_trace & RT_TRACE_SCHED) t->wake_at = kern_now_ns();
     if (g_crit_on) crit_add(CRIT_WAKE, t->handle, t->waker, 0, 0, t->wake_at);
-    plat_cond_signal(&t->cv);
+    if (!t->spinning) plat_cond_signal(&t->cv);   // a spinner reads woke under G before it would sleep
 }
 
 static void wake_sync_waiters(void) {
@@ -245,6 +246,38 @@ static void wake_sync_waiters(void) {
         if (w->wkind == W_SYNC) wake(w, (uint32_t)-1);
         w = n;
     }
+}
+
+// wait_spin = <us> (TOTK_WAIT_SPIN, default 0: sleep at once): a guest thread about to sleep for a wake or a virtual
+// core first spins that long, holding neither G nor a core. Most waits on the frame's critical path end within tens of
+// microseconds, and a host thread woken from sleep starts that much later again (tools/crit_path.py "wake latency").
+// On the AYN Thor 50 us took the critical path's wake latency from 2.2 to 1.3 ms a frame, but the game threads ran
+// that much slower (the spinners' CPU and power), and the frame stayed 33 ms (docs/android-plan.md): off by default.
+static uint64_t wait_spin_ns(void) {
+    static int64_t ns = -1;
+    if (ns < 0) ns = (int64_t)cfg_int("TOTK_WAIT_SPIN") * 1000;
+    return (uint64_t)ns;
+}
+
+// Spin without G until the flag says the wait is over (*flag nonzero, or >= 0 with ge0) or the time is up; returns
+// with G held again. A woken thread spins for G too while the time lasts: its waker usually still holds G, and the
+// mutex's own short spin would put it to sleep behind it, to start that much later again.
+static void spin_unlocked(RtThread *t, const int *flag, int ge0, uint64_t until) {
+    t->spinning = 1;
+    unlock();
+    for (;;) {
+        int v = __atomic_load_n(flag, __ATOMIC_ACQUIRE);
+        if ((ge0 ? v >= 0 : v != 0) || kern_now_ns() >= until) break;
+        plat_pause();
+    }
+    while (!plat_mutex_trylock(&G)) {
+        if (kern_now_ns() >= until) {
+            lock();
+            break;
+        }
+        plat_pause();
+    }
+    t->spinning = 0;
 }
 
 // SleepConditionVariableSRW counts milliseconds: round up (late is legal, early is not) and re-check the deadline
@@ -263,6 +296,8 @@ static uint32_t block_inner(RtThread *t, int kind, int64_t ns) {
     uint64_t now = kern_now_ns();
     int forever = ns < 0 || (uint64_t)ns > UINT64_MAX - now;
     uint64_t deadline = forever ? 0 : now + (uint64_t)ns;
+    uint64_t spin = wait_spin_ns();
+    if (spin && !t->woke) spin_unlocked(t, &t->woke, 0, forever || deadline - now > spin ? now + spin : deadline);
     while (!t->woke) {
         if (forever) {
             plat_cond_wait(&t->cv, &G);
@@ -942,7 +977,7 @@ static void core_grant(int c) {
     core_count();
     if (g_diag > 0) b->dg_rel = g_dg_rel;
     if (rt_trace & RT_TRACE_SCHED) b->grant_at = kern_now_ns();
-    plat_cond_signal(&b->cv);
+    if (!b->spinning) plat_cond_signal(&b->cv);
 }
 
 static void core_put(RtThread *t) {
@@ -1054,6 +1089,8 @@ static void core_take(RtThread *t) {
         while (__atomic_load_n(&t->cur_core, __ATOMIC_RELAXED) < 0 && kern_now_ns() < end) plat_pause();
         lock();
         if (t->cur_core >= 0) g_ap_spin_ok++;
+    } else if (wait_spin_ns() && t->cur_core < 0) {   // no holder to interrupt: wait_spin, then sleep until granted
+        spin_unlocked(t, &t->cur_core, 1, kern_now_ns() + wait_spin_ns());
     }
     int sampled = 0;
     while (t->cur_core < 0) {
@@ -1096,9 +1133,9 @@ int kern_core_away(void) {
     if (!t || t->cur_core < 0) return 0;
     lock();
     core_put(t);
-    acct(t, S_HOST);
-    if (rt_trace & RT_TRACE_SCHED)   // the caller as an exe RVA (totk.map)
+    if (rt_trace & RT_TRACE_SCHED)   // the caller as an exe RVA (totk.map), before acct records it
         t->wobj = (uintptr_t)__builtin_return_address(0) - plat_exe_base();
+    acct(t, S_HOST);
     unlock();
     return 1;
 }
