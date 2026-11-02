@@ -4,8 +4,8 @@ The Android build lifts the game's ARM64 code to C and compiles it back to ARM64
 that code is about three times the instructions of the original and the frame waits on it: 22-23 ms of the 28.8 ms
 critical path in performance mode is the main thread and five workers running game code ([android-plan.md](android-plan.md),
 "Status"). The host is ARM64 like the Switch, so the game's own code could run unchanged, as MacNativeGames does on
-Apple silicon and Eden's NCE does on this SoC. This document scopes that for this repository. Nothing here is built
-yet except the probe.
+Apple silicon and Eden's NCE does on this SoC. This document scopes that for this repository. Built so far: the probe
+and milestone 1, the rewritten 1.0.0 modules (below).
 
 ## What runs natively, and what stays
 
@@ -48,11 +48,11 @@ unchanged. Host functions are entered through numbered thunks that switch to a h
 - `TPIDRRO_EL0` reads 0, and `TPIDR_EL0` is bionic's thread pointer.
 
 The one Apple dependency of the rewriter is how a trampoline finds its thread's slots: MacNativeGames reads
-`tpidrro_el0`, Darwin's thread-specific data base, and adds a key. On Linux that register is 0. The Android variant
-needs a base reachable in one or two instructions without a call. Candidates: a bionic TLS slot at a fixed offset
-from `TPIDR_EL0` that this process does not use (the native-bridge slot, which only a native bridge uses), checked at
-start-up and at every guest thread's creation; or a register the trampoline already has, such as a pointer stored
-at a fixed offset of the guest TLR. Deciding this is the first task of milestone 1.
+`tpidrro_el0`, Darwin's thread-specific data base, and adds a key. On Linux that register is 0. The Android rewrite
+reads `TPIDR_EL0` and loads bionic's `TLS_SLOT_APP` (slot 2, reserved for apps since Android 10): the runtime keeps
+each guest thread's slot block there, so `mrs xT, tpidr_el0; ldr xT, [xT, #16]` replaces the one Apple word. On the
+Thor that slot is empty on the app's threads, and the sequence reads a slot through it (`--probe-exec`). The runtime
+must check the slot is still empty when it creates each guest thread.
 
 ## What this repository has to write
 
@@ -67,9 +67,14 @@ at a fixed offset of the guest TLR. Deciding this is the first task of milestone
 
 ## Milestones
 
-1. **Slot base and rewrite.** Choose the slot base; run the adapted rewriter on 1.0.0's three modules and pass
-   MacNativeGames' verifiers (`structck.py`, `equiv.py`) on them. Done when the patched images and site tables build
-   under `build/v0-native/`.
+1. **Slot base and rewrite** (done, 2026-11-02). `tools/native/rewrite.py --version v0 --verify` (README in
+   `tools/native/`) writes the patched images, site tables and a layout with room for each patch area to
+   `build/v0-native/`. Sites: `main` 30,222 (29,349 x18, 796 TPIDR_EL0 reads, 76 exclusive windows, 1 call window, 108
+   jump tables), `sdk` 12,964 (60 SVC gates, 40 counter reads now `cntvct_el0` in place), `subsdk0` 10,201. The
+   structure checker passes on all three, and the equivalence checker runs every site against Unicorn with 0
+   divergent (`main` 93,511 trials) and catches all 300 deliberately broken blocks per module. Patch areas: `main`
+   42.7 MiB, `sdk` 1.3 MiB, `subsdk0` 0.4 MiB; the modules end 137 MiB above `0x2000000000` (`main` 113 MiB, `subsdk0` 7 MiB, `sdk` 15 MiB), well below the
+   kernel region.
 2. **Boot.** Loader, gate, thread entry and host thunks; the guest kernel's probes and `--boot` reach the title screen
    on the Thor with native guest code.
 3. **Play.** Spin gates, async preemption, alternate stacks, crash reports; the save loads and plays outdoors for

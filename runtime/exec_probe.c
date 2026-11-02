@@ -4,7 +4,9 @@
 //   guest modules need, runs; Android's SELinux decides this per app domain (execmem);
 // - a routine that changes x18, called through a trampoline that saves and restores it, returns to host code intact;
 // - the counters guest code reads with MRS (CNTVCT_EL0, CNTPCT_EL0, CNTFRQ_EL0) and the thread registers
-//   (TPIDR_EL0, TPIDRRO_EL0) are readable at EL0, and what they hold: a SIGILL is caught and reported.
+//   (TPIDR_EL0, TPIDRRO_EL0) are readable at EL0, and what they hold: a SIGILL is caught and reported;
+// - bionic's TLS_SLOT_APP ([TPIDR_EL0 + 16]) is empty on the main thread and on a new thread, and the slot sequence
+//   of tools/native/patch_nso.py (mrs tpidr_el0; ldr [#16]; key offset; ldr) reads a slot through it.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +15,7 @@
 
 #if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
+#include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
@@ -68,6 +71,17 @@ static void *code_at(uintptr_t want, const uint32_t *words, size_t n) {
         }                                                                                                             \
     } while (0)
 
+#define TLS_SLOT_APP 2   // bionic's slot available to apps (tools/native/README.md)
+static uint64_t *tls_slots(void) {
+    uint64_t *tp;
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    return tp;
+}
+static void *slot_app_of_new_thread(void *out) {
+    *(uint64_t *)out = tls_slots()[TLS_SLOT_APP];
+    return NULL;
+}
+
 int probe_exec(void) {
     static const uint32_t ret42[] = {0xd2800540u /* mov x0, #42 */, 0xd65f03c0u /* ret */};
     static const uint32_t x18[] = {0xd28000f2u /* mov x18, #7 */, 0xaa1203e0u /* mov x0, x18 */, 0xd65f03c0u /* ret */};
@@ -90,6 +104,26 @@ int probe_exec(void) {
         printf("exec: fixed code at %p set x18 to %llu; host x18 %#llx before, %#llx after\n", b, (unsigned long long)r,
                (unsigned long long)before, (unsigned long long)after);
         CHECK(r == 7 && before == after, "x18 saved around guest-style code");
+    }
+
+    // The rewritten code's slot base: x0 = [[TPIDR_EL0 + 16] + key offset] (patch_nso.py emit_tp, emit_slot_addr)
+    static const uint32_t slot_read[] = {0xd53bd040u /* mrs x0, tpidr_el0 */, 0xf9400800u /* ldr x0, [x0, #16] */,
+                                         0x91006000u /* add x0, x0, #24 */, 0xf9400000u /* ldr x0, [x0] */,
+                                         0xd65f03c0u /* ret */};
+    uint64_t main_slot = tls_slots()[TLS_SLOT_APP], thread_slot = ~0ull;
+    pthread_t th;
+    if (!pthread_create(&th, NULL, slot_app_of_new_thread, &thread_slot)) pthread_join(th, NULL);
+    printf("exec: TLS_SLOT_APP holds %#llx on this thread, %#llx on a new thread\n", (unsigned long long)main_slot,
+           (unsigned long long)thread_slot);
+    CHECK(main_slot == 0 && thread_slot == 0, "bionic's TLS_SLOT_APP is free");
+    void *c = code_at(0, slot_read, 5);
+    if (c && main_slot == 0) {
+        static uint64_t block[8] = {0, 0, 0, 0x5107u};
+        tls_slots()[TLS_SLOT_APP] = (uint64_t)(uintptr_t)block;
+        uint64_t r = call_saving_x18(c);
+        tls_slots()[TLS_SLOT_APP] = 0;
+        printf("exec: slot read through TLS_SLOT_APP returned %#llx\n", (unsigned long long)r);
+        CHECK(r == 0x5107u, "slot read through TLS_SLOT_APP");
     }
 
     struct sigaction sa = {0}, old;

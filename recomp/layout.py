@@ -29,8 +29,10 @@ def align_up(v, a=ALIGN):
     return (v + a - 1) & ~(a - 1)
 
 
-def layout(exefs, target='pc'):
-    """[(name, base, size)] for the modules present in the ExeFS directory, in load order."""
+def layout(exefs, target='pc', sizes=None):
+    """[(name, base, size)] for the modules present in the ExeFS directory, in load order. sizes: module name -> size
+    in place of the NSO's image and bss, for images that carry more behind them (the native rewrite's key page and
+    patch area, tools/native/rewrite.py)."""
     exefs = Path(exefs)
     out, base = [], FIRST_BASES[target]
     for name in ORDER:
@@ -38,6 +40,10 @@ def layout(exefs, target='pc'):
         if not path.exists():
             continue
         size = Nso(str(path)).size
+        if sizes and name in sizes:
+            if sizes[name] < size:
+                raise ValueError(f'{name}: size {sizes[name]:#x} below its image and bss ({size:#x})')
+            size = sizes[name]
         out.append((name, base, size))
         base = align_up(base + size)
     if base > ADDRESS_LIMIT:
