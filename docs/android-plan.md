@@ -70,16 +70,24 @@ Done, and how it was checked:
     time is 71% our code (lifted game code and the runtime), 17% kernel, 6% clock_gettime (a clock read per SVC and
     per spin-wait pass).
 
+- Game code speed (2026-11-02): the main thread's protection faults came from the write-watch queries re-arming the
+  heap beside the pools; tracking only the pools' pages (`plat_mem_watch_only`) took its faults from 17800 to 2500 a
+  second and its CPU from about 10.5 to 9.5 ms a frame. Keeping 16 guest registers in C locals instead of 6
+  (`gen.py --reg-locals 16`) made no difference measurable in alternating runs (main thread 2.70-2.92 s per 10 s
+  either way), so it stays at 6. At 30 fps the main thread uses about 9.2 ms of CPU a frame and the replay 10-12 ms:
+  no thread alone is over 16.7 ms. The frame is the chain between them (the presenting thread waits for the main
+  thread, which waits for its workers and for virtual cores), and on the 60 Hz display every frame between 16.7 and
+  33.3 ms shows as 33.3: the frame rate cannot show a gain until the whole chain fits 16.7 ms.
+
 Open, in order:
-0. The game code's own speed on the main and worker threads (about 20 ms a frame where the Switch takes under 33 ms on
-   1 GHz cores): profile the lifted functions on the critical path and the code the lifter emits for them; the clock
-   reads per SVC and spin pass.
-1. The replay (12 ms): per-draw work (resource binding, the uniform snapshot lookups, the texture lock per binding),
-   the recorder's 16 MiB ring and its drains.
-2. Performance mode with the main and presenting threads on the X3, and an APerformanceHint session.
+0. A finer step to measure and to play at: the Thor's 120 Hz mode (ANativeWindow_setFrameRate on the game's window)
+   with `fps_limit = 40`; then asynchronous replay again, which takes the replay off the chain.
+1. The chain itself: what the main thread waits for each frame (its workers, the virtual cores, the presenting
+   thread) with `tools/crit_path.py` at 120 Hz.
+2. The replay (10-12 ms): per-draw work, the recorder's ring and drains.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
-4. 1.0.0's equipment cooldown fix; 40 fps on the 120 Hz mode as a step before 60.
+4. 1.0.0's equipment cooldown fix; performance mode with the main and presenting threads on the X3.
 5. Start-up texture streaming on the presenting thread; the second screen's focus; a save importer.
 
 ## 0. Starting point
