@@ -193,7 +193,7 @@ enum { INTR_IDLE, INTR_REQ, INTR_STOPPED, INTR_GO };
 struct PlatIntr {
     pthread_t pt;
     volatile int32_t state;
-    uint64_t rip, rsp, to;
+    uint64_t rip, rsp, fp, to;
 };
 
 static __thread PlatIntr *intr_me;
@@ -207,9 +207,11 @@ static void intr_handler(int sig, siginfo_t *si, void *uc) {
 #if defined(__x86_64__)
     t->rip = (uint64_t)u->uc_mcontext.gregs[REG_RIP];
     t->rsp = (uint64_t)u->uc_mcontext.gregs[REG_RSP];
+    t->fp = (uint64_t)u->uc_mcontext.gregs[REG_RBP];
 #elif defined(__aarch64__)
     t->rip = (uint64_t)u->uc_mcontext.pc;
     t->rsp = (uint64_t)u->uc_mcontext.sp;
+    t->fp = (uint64_t)u->uc_mcontext.regs[29];
 #endif
     int32_t req = INTR_REQ;
     if (!__atomic_compare_exchange_n(&t->state, &req, INTR_STOPPED, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
@@ -269,6 +271,8 @@ int plat_intr_stop(PlatIntr *t, uint64_t *rip, uint64_t *rsp) {
     *rsp = t->rsp;
     return 1;
 }
+
+uint64_t plat_intr_fp(PlatIntr *t) { return t->fp; }
 
 int plat_intr_resume(PlatIntr *t, uint64_t to) {
     t->to = to;

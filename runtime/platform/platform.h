@@ -50,6 +50,7 @@ void plat_intr_free(PlatIntr *t);
 // Stops t and reads its instruction and stack pointers: 1 when stopped, 0 when it did not stop in time (a thread
 // blocked in the OS); t then runs on untouched.
 int plat_intr_stop(PlatIntr *t, uint64_t *rip, uint64_t *rsp);
+uint64_t plat_intr_fp(PlatIntr *t);   // between a stop and its resume: the frame pointer it stopped at (0 if unknown)
 // Lets a stopped t go on: at to when to is nonzero, else where it stopped. 0 when the redirection failed (t then goes
 // on where it stopped).
 int plat_intr_resume(PlatIntr *t, uint64_t to);

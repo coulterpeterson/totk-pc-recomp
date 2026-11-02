@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "gfx.h"
 #include "host.h"
 #include "kernel.h"
 #include "platform/platform.h"
@@ -1562,6 +1563,69 @@ uint64_t kern_threads_created(void) {
 
 Cpu *kern_cpu(void) { return tcur ? tcur->cur : NULL; }
 
+// ---- TOTK_HANG_REPORT=<seconds>: once the game has presented nothing for that long, a line per guest thread: what it
+// waits on (wait kind, address, key, tag, object), its virtual core and host-call depth, its guest pc and lr, and where
+// its host thread is (module and offset, when it can be interrupted). Taken with G if it can be had within a second,
+// without it otherwise (a stop with G held is itself the answer, and the lines may then be torn).
+static const char *const wait_names[] = {"none", "lock", "condvar", "address", "sync"};
+
+static void hang_report(uint64_t frames) {
+    int locked = 0;
+    for (int i = 0; i < 100 && !(locked = plat_mutex_trylock(&G)); i++) plat_sleep_ms(10);
+    rt_log("hang: no present for the last %s s after %llu frames%s", cfg_value("TOTK_HANG_REPORT"),
+           (unsigned long long)frames, locked ? "" : "; the kernel lock G stays held");
+    for (RtThread *t = g_all; t; t = t->all) {
+        char pc[128] = "-", lr[128] = "-", mn[256] = "-";
+        Cpu *c = t->cur ? t->cur : t->cpu;
+        if (c) ldr_describe(c->pc, pc, sizeof pc), ldr_describe(c->x[30], lr, sizeof lr);
+        uint64_t rip = 0, rsp, fp, ret[16];
+        int nret = 0;
+        uintptr_t m = 0;
+        if (t->hthr && !t->exited && plat_intr_stop(t->hthr, &rip, &rsp)) {
+            // The frame chain while the thread is stopped: each frame above the last, within 8 MiB of its stack
+            for (fp = plat_intr_fp(t->hthr); nret < 16 && fp >= rsp && fp < rsp + (8u << 20) && !(fp & 7);) {
+                uint64_t up = ((uint64_t *)(uintptr_t)fp)[0];
+                ret[nret++] = ((uint64_t *)(uintptr_t)fp)[1];
+                if (up <= fp) break;
+                fp = up;
+            }
+            plat_intr_resume(t->hthr, 0);
+            plat_module_of((uintptr_t)rip, mn, sizeof mn, &m);
+        }
+        char stack[16 * 48] = "", *o = stack;
+        for (int i = 0; i < nret; i++) {
+            char rn[256] = "?";
+            uintptr_t rm = 0;
+            plat_module_of((uintptr_t)ret[i], rn, sizeof rn, &rm);
+            const char *b = strrchr(rn, '/');
+            o += snprintf(o, (size_t)(stack + sizeof stack - o), " %s+%#llx", b ? b + 1 : rn, (unsigned long long)(ret[i] - rm));
+        }
+        rt_log("hang: thread %#x p%d%s core %d depth %d wait %s addr %#llx key %#llx tag %#x obj %#llx; guest pc %s lr %s; "
+               "host %s+%#llx;%s", t->handle, t->prio, t->is_main ? " main" : "", t->cur_core, t->host_depth,
+               t->wkind >= 0 && t->wkind < (int)(sizeof wait_names / sizeof *wait_names) ? wait_names[t->wkind] : "?",
+               (unsigned long long)t->waddr, (unsigned long long)t->wkey, t->wtag, (unsigned long long)t->wobj, pc, lr,
+               mn, (unsigned long long)(rip - m), stack);
+    }
+    if (locked) unlock();
+}
+
+static void hang_watch(void *arg) {
+    uint64_t limit = (uint64_t)(uintptr_t)arg * 1000000000ull, last = 0, since = kern_now_ns();
+    int told = 0;
+    for (;;) {
+        plat_sleep_ms(500);
+        uint64_t f = gfx_stats().frames, now = kern_now_ns();
+        if (f != last || !f) {
+            last = f, since = now, told = 0;
+            continue;
+        }
+        if (!told && now - since >= limit) {
+            hang_report(f);
+            told = 1;   // once per stop
+        }
+    }
+}
+
 uint32_t kern_main_thread(Cpu **cpu) {
     if (tcur) {
         if (!tcur->is_main) rt_fatal("kern_main_thread on guest thread %#x, not the main thread", tcur->handle);
@@ -1590,6 +1654,9 @@ uint32_t kern_main_thread(Cpu **cpu) {
     unlock();
     tcur = t;
     *cpu = t->cpu;
+    int hang = atoi(cfg_value("TOTK_HANG_REPORT"));
+    if (hang > 0 && !plat_thread_spawn(hang_watch, (void *)(uintptr_t)hang, "hang watch", 0))
+        rt_log("kernel: the TOTK_HANG_REPORT watcher could not start");
     return t->handle;
 }
 

@@ -132,6 +132,8 @@ void plat_intr_free(PlatIntr *t) {
     _aligned_free(t);
 }
 
+uint64_t plat_intr_fp(PlatIntr *t) { (void)t; return 0; }   // the hang report's stack walk is Linux and Android only
+
 int plat_intr_stop(PlatIntr *t, uint64_t *rip, uint64_t *rsp) {
     if (SuspendThread(t->h) == (DWORD)-1) return 0;
     memset(&t->ctx, 0, sizeof t->ctx);
