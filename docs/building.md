@@ -245,6 +245,17 @@ Steps, with `v0` (1.0.0) as the example version:
    .venv/bin/python tools/install_android.py --version v0
    ```
 
+Two game versions can live on the device side by side: `--version-folder` pushes a version's data into a folder of
+that name inside the data folder (`v143/` with `exefs/`, `romfs/`, `romfs-index.bin` and `romfs-patches/`), and the APK
+built for that version reads it from there before the data folder itself (`runtime/main.c` portable_paths). Saves,
+settings and shader caches stay shared; a save the newer version wrote may not load in the older one. Switching
+versions is then an APK install:
+
+```sh
+.venv/bin/python tools/install_android.py --version v143 --version-folder
+.venv/bin/python tools/install_android.py --version v0 --no-data
+```
+
 The APK's launcher icon is the game's own: `tools/extract.py` takes it from the base game's Control NCA into
 `<work>/extracted/v0/control/`, and `tools/build_apk.py` packs it (without it the APK has Android's default icon).
 

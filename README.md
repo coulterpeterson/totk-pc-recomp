@@ -19,12 +19,12 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
 
 ## Status
 
-- **Game version:** 1.0.0 (the base game) is the version played and measured on the device. The build also accepts
-  the 1.2.1 and 1.4.3 updates, which play on PC but have not been run on Android yet. Other updates, 1.4.2 among them,
-  are not supported: each version needs its own table of code patches.
-- **Speed on the AYN Thor Max:** 40-48 fps outdoors in performance mode (48 in the latest four-minute run at the
-  60 fps cap, about 40 when the device runs hot) and 30 fps in standard mode, at correct game speed, with the Mesa
-  Turnip driver. Qualcomm's own driver draws black tiles over moving characters outdoors.
+- **Game version:** 1.0.0 (the base game) and the 1.4.3 update both play on the device, and both can be installed side by
+  side (`tools/install_android.py --version-folder`). 1.2.1 builds too but has not been run on Android. Other updates,
+  1.4.2 among them, are not supported: each version needs its own table of code patches.
+- **Speed on the AYN Thor Max:** 44-48 fps outdoors in performance mode at the 60 fps cap (about 40 when the device runs
+  hot) and 30 fps in standard mode, at correct game speed, with the Mesa Turnip driver. In alternating four-minute runs
+  1.4.3 averaged 46.3 fps and 1.0.0 44.0; 1.0.0 with native execution 46.3. Qualcomm's own driver draws black tiles over moving characters outdoors.
 - **Stability:** a 30-minute session outdoors on a real save ran without a stop. Expect visual bugs; the first minutes
   stutter while shaders are translated on the device and cached.
 

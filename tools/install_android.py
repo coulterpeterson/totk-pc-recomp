@@ -10,7 +10,12 @@ your own game's: keep it on your devices.
 --gpu-driver FILE puts a Vulkan driver library (a Mesa Turnip build for Adreno GPUs) into gpu_driver/ of the data
 folder, which the app then loads instead of the system's driver (runtime/android.c); --gpu-driver system removes it.
 
+--version-folder puts the game data into <data>/<version>/ (v143/ for 1.4.3) instead of the data folder itself, so two
+game versions sit on the device side by side and each version's APK finds its own; saves, settings and caches stay
+shared (a save a newer version wrote may not load in an older one).
+
   python tools/install_android.py [--version v0] [--serial SERIAL] [--no-apk] [--no-data] [--gpu-driver FILE|system]
+                                  [--version-folder]
 """
 
 import argparse
@@ -117,6 +122,9 @@ def main():
     ap.add_argument('--no-apk', action='store_true', help='push the data only')
     ap.add_argument('--no-data', action='store_true', help='install the APK only')
     ap.add_argument('--gpu-driver', help='a Vulkan driver .so for gpu_driver/, or "system" to remove the one there')
+    ap.add_argument('--version-folder', action='store_true',
+                    help='push the game data into <data>/<version>/, beside another version\'s; the app built for that '
+                         'version looks there first (runtime/main.c portable_paths)')
     args = ap.parse_args()
     if not shutil.which('adb'):
         sys.exit('adb not found: install the Android platform tools')
@@ -137,15 +145,16 @@ def main():
             push(args.serial, drv, f'{HOME}/gpu_driver/{drv.name}')
     if args.no_data:
         return
-    print(f'data -> {HOME}', flush=True)
+    data = f'{HOME}/{args.version}' if args.version_folder else HOME
+    print(f'data -> {data}', flush=True)
     for name in ('main', 'main.npdm', 'sdk', 'subsdk0'):
-        push(args.serial, extracted / 'exefs' / name, f'{HOME}/exefs/{name}')
-    push(args.serial, extracted / 'romfs' / 'romfs.bin', f'{HOME}/romfs/romfs.bin')
-    push(args.serial, out / 'romfs-index.bin', f'{HOME}/romfs-index.bin')
+        push(args.serial, extracted / 'exefs' / name, f'{data}/exefs/{name}')
+    push(args.serial, extracted / 'romfs' / 'romfs.bin', f'{data}/romfs/romfs.bin')
+    push(args.serial, out / 'romfs-index.bin', f'{data}/romfs-index.bin')
     push(args.serial, ROOT / 'build' / 'xlate-android' / 'totk_xlate.id', f'{HOME}/totk_xlate.id')
-    for overlay in sorted(out.glob('romfs-patches*')):
+    for overlay in sorted(out.glob('romfs-patches*')):   # beside romfs-index.bin, where romfs.c looks for them
         for f in sorted(p for p in overlay.rglob('*') if p.is_file()):
-            push(args.serial, f, f'{HOME}/{f.relative_to(out).as_posix()}')
+            push(args.serial, f, f'{data}/{f.relative_to(out).as_posix()}')
     print('done: start "TotK Recomp" on the device; logcat -s totk shows its log')
 
 

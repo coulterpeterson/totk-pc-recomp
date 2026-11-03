@@ -183,6 +183,15 @@ Done, and how it was checked:
   the game version lacks (shadow map size, shadow range, field of view, the high-fps fix). At the 60 cap the lifted build
   played the save at 48.3 fps over the last 100 s of a four-minute run (every window 47.9-49.1, speed 1.000; GPU after
   the last part 13.6 ms, walk 6.0 ms), against 40-41 uncapped earlier the same day while the device ran at 88-91 C.
+- 1.4.3 on the Thor (2026-11-03): built from the player's 1.4.3 dump with no code change, its data beside 1.0.0's
+  (`install_android.py --version-folder`, `runtime/main.c` portable_paths), it boots, loads the save written by 1.0.0
+  and plays. Six alternating four-minute runs at the 60 cap (performance mode, battery 26-30 C, the 1.0.0 save
+  restored before each): 1.0.0 lifted 44.2 and 43.9 fps, 1.4.3 lifted 44.8 and 47.7, 1.0.0 native 47.6 and 45.0, game
+  speed 1.000 in all. The replay's walk (6.4-7.3 ms) and the GPU after the last part (12.7-13.5 ms) are the same in all
+  six: about 20 of the 21-23 ms frame is the graphics pipeline, which leaves game code a small share either way. The
+  native rewrite of 1.4.3 (`tools/native/rewrite.py --version v143 --verify`) passes the structure checker and the
+  Unicorn equivalence check (68,968 sites, 0 divergent, every mutation caught), but nine of its patch sets, the
+  real-time step among them, have sites of several words, which the native build cannot hold yet.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game

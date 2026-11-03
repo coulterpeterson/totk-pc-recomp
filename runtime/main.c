@@ -504,8 +504,24 @@ static void portable_paths(RtConfig *c) {
     char *cut = n && n < sizeof exe ? plat_last_sep(exe) : NULL;
     if (!cut) return;
     *cut = 0;
-    c->exefs = portable_path(exe, "TOTK_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
-    c->romfs = portable_path(exe, "TOTK_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
+    const char *data = exe;
+#ifdef __ANDROID__
+    // One data folder holds several game versions: this build's data may sit in a folder named for its version
+    // (tools/install_android.py --version-folder: <home>/v143/ with exefs, romfs, romfs-index.bin and romfs-patches),
+    // which wins over the data beside it. Saves, settings and caches stay shared.
+    static char vdir[PLAT_PATH_MAX * 2 + 16];
+    char probe[sizeof vdir + 32];
+    snprintf(vdir, sizeof vdir, "%s/v%d", exe, rt_game_version == 100 ? 0 : rt_game_version);
+    snprintf(probe, sizeof probe, "%s/exefs/main.npdm", vdir);
+    if (plat_file_exists(probe)) {
+        data = vdir;
+        snprintf(probe, sizeof probe, "%s/romfs-index.bin", vdir);
+        if (!cfg_get("TOTK_ROMFS_INDEX") && plat_file_exists(probe)) plat_setenv("TOTK_ROMFS_INDEX", probe);
+        rt_log("main: game data for this version from %s", vdir);
+    }
+#endif
+    c->exefs = portable_path(data, "TOTK_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
+    c->romfs = portable_path(data, "TOTK_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
     c->profile = portable_path(exe, "TOTK_PROFILE_DIR", "profile", NULL, pp_profile, sizeof pp_profile, c->profile);
 }
 
