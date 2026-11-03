@@ -57,6 +57,10 @@ typedef struct Tex {
     uint8_t listed;               // in owned[]
     uint8_t *snap;                // a texture that fills no page: its storage bytes when the GPU write was recorded
     uint32_t wt_n;                // WriteTexels into the storage since the last upload
+    VkBuffer rb;                  // fence write-back target: the image's texels, copied at the end of the submission
+    VmaAllocation rba;            // that rendered it (vk_texture_record_readbacks); host-visible, mapped at rb_map
+    uint8_t *rb_map;
+    uint64_t rb_size, rb_fence;   // rb_fence: the submission whose copy rb holds; 0 none
     struct Tex *rel_prev, *rel_next;   // while released: the list of released entries, oldest first
 } Tex;
 
@@ -543,6 +547,7 @@ static void destroy_tex(Tex *e) {
     if (e->released) nreleased--, rel_unlink(e);
     vk_exec_image_gone(e->pub.image);
     vk_defer_image(e->pub.image, e->alloc);
+    if (e->rb) vk_defer_buffer(e->rb, e->rba);
     free(e->snap);
     free(e);
 }
@@ -1022,6 +1027,7 @@ const VkTexImage *vk_texture_get(const tex_t *t) {
 // read once. wb_trace: TOTK_TRACE=gfx, read together with it.
 enum { WB_SMALL_DEFAULT = 64 << 10 };
 static int small_pending;
+static uint64_t rb_used, rb_missed;   // write-backs from a recorded copy, and through a copy made then (TOTK_TRACE=perf)
 static uint64_t wb_limit = WB_SMALL_DEFAULT;
 static int wb_trace;
 static int wb_cfg_read;
@@ -1468,10 +1474,14 @@ void vk_write_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r, co
 // A mirrored texture the GPU rendered into holds its texels in its image only; its storage keeps what the CPU last put
 // there. The game may still read that storage with the CPU: TotK moves its generated grass maps between pools with
 // memcpy once the GPU is done, and the copy then carried zeros. Such a read writes the image back first.
-static void write_back(Tex *e) {
+// The (level, layer) slices a write-back covers, each as the region of a whole level and its offset in a tight buffer
+// of all of them, in order; fn may be NULL. Returns the buffer's size.
+typedef void (*SliceFn)(Tex *e, const Region *g, const NVNcopyRegion *r, size_t off, void *arg);
+static size_t for_slices(Tex *e, SliceFn fn, void *arg) {
     const nvn_texdesc *d = &e->t.d;
     int linear = nvn_tex_is_linear(d), is3d = d->target == NVN_TEXTURE_TARGET_3D;
     uint32_t levels = linear ? 1 : e->pub.levels, layers = linear || is3d ? 1 : e->pub.layers;
+    size_t off = 0;
     for (uint32_t lv = 0; lv < levels; lv++)
         for (uint32_t ly = 0; ly < layers; ly++) {
             view_t v = {.set_levels = 1, .set_layers = 1, .base_level = (uint8_t)lv, .min_layer = (uint16_t)ly};
@@ -1480,11 +1490,36 @@ static void write_back(Tex *e) {
                                .depth = is3d ? (int)mip(d->depth, lv) : 1};
             Region g;
             if (!region_of(&e->t, &v, &r, 0, 0, &g)) continue;
-            uint8_t *buf = malloc(g.img * (size_t)g.nz);
-            if (!buf) rt_fatal("vk: out of memory for a texture write-back");
-            if (image_texels(e, &g, &r, buf, 0)) storage_texels(&e->t, &g, &r, buf, 1);
-            free(buf);
+            if (fn) fn(e, &g, &r, off, arg);
+            off += g.img * (size_t)g.nz;
         }
+    return off;
+}
+
+static void slice_from_image(Tex *e, const Region *g, const NVNcopyRegion *r, size_t off, void *arg) {
+    (void)off, (void)arg;
+    uint8_t *buf = malloc(g->img * (size_t)g->nz);
+    if (!buf) rt_fatal("vk: out of memory for a texture write-back");
+    if (image_texels(e, g, r, buf, 0)) storage_texels(&e->t, g, r, buf, 1);
+    free(buf);
+}
+
+static void slice_from_rb(Tex *e, const Region *g, const NVNcopyRegion *r, size_t off, void *arg) {
+    (void)arg;
+    if (off + g->img * (size_t)g->nz <= e->rb_size) storage_texels(&e->t, g, r, e->rb_map + off, 1);
+}
+
+// The image's texels to its storage: from the copy recorded at the end of the submission that rendered it when that copy
+// is of the latest render and its fence is done (no GPU work here), else through a staging copy the GPU makes now.
+static void write_back(Tex *e) {
+    if (e->rb && e->rb_fence && e->rb_fence == e->gpu_fence && vk_sync_fence_done() >= e->rb_fence) {
+        vmaInvalidateAllocation(vk_ctx()->vma, e->rba, 0, VK_WHOLE_SIZE);
+        for_slices(e, slice_from_rb, NULL);
+        rb_used++;
+    } else {
+        for_slices(e, slice_from_image, NULL);
+        rb_missed++;
+    }
     e->gpu_dirty = 0;
 }
 
@@ -1580,6 +1615,71 @@ void vk_texture_write_back(uint64_t addr, uint64_t size) {
 // storage, unless the CPU rewrote it since. Larger targets still go back on an invalidate, memcpy or ReadTexels.
 int vk_texture_small_dirty(void) { return __atomic_load_n(&small_pending, __ATOMIC_ACQUIRE); }
 
+// The fence write-back's copies, recorded where the replay ends a submission (after its last full barrier): every small
+// target that submission rendered is copied into a host-visible buffer of its own, so the write-back after a fence wait
+// reads that buffer instead of copying the image on the GPU then and waiting for it, a round trip queued behind the
+// GPU's current frame (about 0.6 ms a target on the AYN Thor, three targets a frame). Formats the replay decodes on
+// upload (BC, ASTC, expanded RGB), packed depth-stencil and enlarged images keep the old path. Returns the commands
+// recorded.
+static int rb_ok(const Tex *e) {
+    VkImageAspectFlags a;
+    return !e->f.astc_bw && !e->f.bc && !e->f.expand_rgb && e->pub.scale <= 1 && read_aspect(e, &a);
+}
+
+typedef struct { VkBufferImageCopy *rg; int n, cap; VkImageAspectFlags aspect; } RbRegions;
+static void slice_region(Tex *e, const Region *g, const NVNcopyRegion *r, size_t off, void *arg) {
+    RbRegions *x = arg;
+    for (int z = 0; z < g->nz && x->n < x->cap; z++)
+        x->rg[x->n++] = (VkBufferImageCopy){
+            .bufferOffset = off + g->img * (size_t)z,
+            .imageSubresource = {x->aspect, g->level, g->is3d ? 0 : g->layer0 + (uint32_t)z, 1},
+            .imageOffset = {0, 0, g->is3d ? z : 0},
+            .imageExtent = {(uint32_t)r->width, (uint32_t)r->height, 1}};
+    (void)e;
+}
+
+int vk_texture_record_readbacks(VkCommandBuffer cb, uint64_t fence) {
+    if (!vk_texture_small_dirty()) return 0;
+    VkCtx *c = vk_ctx();
+    int n = 0;
+    lock();
+    wb_cfg_init();
+    plat_mutex_lock_shared(&owned_lock);
+    for (int i = 0; i < nowned; i++) {
+        Tex *e = owned[i];
+        if (!e->gpu_dirty || e->gpu_fence != fence || e->t.L.size > wb_limit || !rb_ok(e)) continue;
+        size_t size = for_slices(e, NULL, NULL);
+        if (!size) continue;
+        if (!e->rb || e->rb_size < size) {
+            if (e->rb) vk_defer_buffer(e->rb, e->rba), e->rb = VK_NULL_HANDLE;
+            VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
+                                     .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+            VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
+                                          .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                                   VMA_ALLOCATION_CREATE_MAPPED_BIT};
+            VmaAllocationInfo info;
+            if (vmaCreateBuffer(c->vma, &bi, &ai, &e->rb, &e->rba, &info) != VK_SUCCESS) {
+                e->rb = VK_NULL_HANDLE;
+                continue;
+            }
+            e->rb_map = info.pMappedData, e->rb_size = size;
+        }
+        VkBufferImageCopy rg[64];
+        RbRegions x = {rg, 0, 64, 0};
+        read_aspect(e, &x.aspect);
+        for_slices(e, slice_region, &x);
+        if (!x.n) continue;
+        vkCmdCopyImageToBuffer(cb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, e->rb, (uint32_t)x.n, rg);
+        e->rb_fence = fence;
+        n++;
+    }
+    plat_mutex_unlock_shared(&owned_lock);
+    if (n) barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                   VK_ACCESS_2_HOST_READ_BIT);
+    unlock();
+    return n ? n + 1 : 0;
+}
+
 // TOTK_TRACE=gfx: a dirty target the fence write-back leaves alone because it is over the limit (what a CPU read
 // after the wait would miss), or sends back although it is over the default limit (what a raised limit changed). One
 // line per target address and outcome; the table is small and a full one stops logging.
@@ -1599,7 +1699,40 @@ static void wb_note(const Tex *e, int skipped) {
            (unsigned long long)wb_limit);
 }
 
+// TOTK_TRACE=perf: what the fence write-back did, one line every 10 s (calls with work, targets, bytes, time).
+static struct { uint64_t calls, targets, bytes, ns, t0; } wbs;
+static void wbs_note(int k, Tex **hit, uint64_t t0) {
+    if (!(rt_trace & RT_TRACE_PERF)) return;
+    uint64_t now = kern_now_ns();
+    if (k) wbs.calls++, wbs.ns += now - t0;
+    static uint64_t seen[24];
+    static int nseen;
+    for (int i = 0; i < k; i++) {
+        wbs.targets++, wbs.bytes += hit[i]->t.L.size;
+        int j = 0;
+        while (j < nseen && seen[j] != hit[i]->pub.addr) j++;
+        if (j == nseen && nseen < 24) {
+            seen[nseen++] = hit[i]->pub.addr;
+            rt_log("vk: fence write-back target %#llx: %ux%u format %#x, %u levels, %u layers, %llu bytes%s",
+                   (unsigned long long)hit[i]->pub.addr, hit[i]->t.d.width, hit[i]->t.d.height, hit[i]->t.d.format,
+                   hit[i]->pub.levels, hit[i]->pub.layers, (unsigned long long)hit[i]->t.L.size,
+                   nvn_tex_is_linear(&hit[i]->t.d) ? ", linear" : "");
+        }
+    }
+    if (!wbs.t0) wbs.t0 = now;
+    if (now - wbs.t0 < 10000000000ull) return;
+    double sec = (double)(now - wbs.t0) / 1e9;
+    rt_log("vk: fence write-back: %.1f calls/s with targets, %.1f targets/s, %.1f KiB/s, %.2f ms/s (%.3f ms a call); "
+           "write-backs from recorded copies %llu, through a copy made then %llu", wbs.calls / sec, wbs.targets / sec,
+           wbs.bytes / 1024.0 / sec, wbs.ns / 1e6 / sec, wbs.calls ? wbs.ns / 1e6 / (double)wbs.calls : 0.0,
+           (unsigned long long)rb_used, (unsigned long long)rb_missed);
+    rb_used = rb_missed = 0;
+    memset(&wbs, 0, sizeof wbs);
+    wbs.t0 = now;
+}
+
 void vk_texture_write_back_small(uint64_t fence) {
+    uint64_t t0 = kern_now_ns();
     lock();
     wb_cfg_init();
     __atomic_store_n(&small_pending, 0, __ATOMIC_RELAXED);
@@ -1641,6 +1774,7 @@ void vk_texture_write_back_small(uint64_t fence) {
     for (int i = 0; i < k; i++) write_back(hit[i]);
     for (int i = 0; i < k; i++) perf_count(PERF_CNT_WB);
     for (int i = k; i < n; i++) perf_count(PERF_CNT_WB_SKIP);
+    wbs_note(k, hit, t0);
     free(hit);
     unlock();
 }

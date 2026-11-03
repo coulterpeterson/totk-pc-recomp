@@ -145,18 +145,27 @@ Done, and how it was checked:
   submission (about 6,000 finds a frame over 700 regions). The replay thread's cycles in a 12 s window fell 16%
   (10.99 to 9.26 G); the walk from 8.75 / 8.47 ms to 6.89 / 6.95 ms, and the frame rate from 34.8 / 35.0 to
   36.3 / 35.8 fps. The GPU's time after the last part grew from 14.2 to 15.2 ms: it gets the frame sooner.
-- So 40 fps needs about 4 ms off the chain in performance mode, and 60 fps needs the chain and the GPU both under
-  16.7 ms. The GPU's share is close to what about 2,800 draws a frame cost on this GPU: what is left there is a few
-  tenths of a millisecond each from barriers and state churn, and render scale (half scale saves about 2.3 ms). For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
+- The fence write-back as recorded copies (2026-11-03). In play the CPU waits for a fence about once a frame and three
+  small targets go back each time (TotK's 128x128 grass map and two 1x1 targets, 66 KiB): each was a GPU copy and a
+  wait queued behind the frame the GPU was rendering, 1.75 ms on the main thread a frame, and with the write-back off
+  (`wb_fence_limit = 0`, which leaves cut grass standing) the frame rate rose from 35.5 / 35.7 to 39.7 / 39.1 fps.
+  The replay now copies every such target into a host-visible buffer of its own at the end of the submission that
+  rendered it (`vk_texture.c` `vk_texture_record_readbacks`), and the write-back after the fence reads that buffer:
+  0.07 ms a call, every write-back from a recorded copy, 40.2 fps on the native build and 40.7 on the lifted one
+  (`trace = perf` logs it as `vk: fence write-back`). Swinging the sword in the grass cuts it as before.
+- So 40 fps, which needed about 4 ms off the chain in performance mode, is reached; 60 fps needs the chain and the GPU
+  both under 16.7 ms. The GPU's share is close to what about 2,800 draws a frame cost on this GPU: what is left there
+  is a few tenths of a millisecond each from barriers and state churn, and render scale (half scale saves about
+  2.3 ms). For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
   unevenly, and the real-time step needs the equipment cooldown fix 1.0.0's patch table lacks.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game
    threads' CPU, but the frame stays near 28 ms: it is bound by the graphics pipeline, the game waiting for GPU fences
-   behind the replay (9 ms walk) and the GPU, which needs 20.9 ms for a frame handed over at once and idles about
-   3.5 ms of it behind the walk ([native-execution.md](native-execution.md), milestone 4). Next: resolution-independent
-   GPU work, the fence write-back recorded with the rendering work; and 1.0.0's equipment cooldown fix for the
-   real-time step.
+   behind the replay and the GPU, which needs 20.9 ms for a frame handed over at once (milestone 4 of
+   [native-execution.md](native-execution.md)). With the replay's walk trimmed and the fence write-back recorded with
+   the rendering (2026-11-03) the save runs at 40 fps uncapped. Next: barriers and state churn on the GPU, render scale;
+   and 1.0.0's equipment cooldown fix for the real-time step.
 2. The replay (6.9 ms walk of one 770 KiB handle a frame since 2026-11-03, from 8.6): what is left of its CPU time is
    spread over lookups that miss the cache (texture descriptors, programs' control blocks, pipeline binding lists).
    Translating the frame's big recording when it ends could save at most the GPU's idle time behind the walk.
