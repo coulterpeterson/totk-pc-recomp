@@ -749,6 +749,13 @@ def android_toolchain(ndk):
     for flags in (GEN_FLAGS, RT_FLAGS):
         flags[:] = [target, '-fPIC'] + ['-march=armv8.2-a+crc' if f.startswith('-march=x86-64') else f for f in flags
                                         if not f.startswith('-DRT_CPU_LEVEL')]
+    # The runtime adds +rcpc: its acquire loads compile to LDAPR. LDAR waits for every earlier store-release to
+    # complete, and the replay publishes a packet to its recorder with one per Vulkan call (vk_rec.c pub): its
+    # generation and flag reads stalled behind them (on the AYN Thor the ring's put and vk_mem_gen fell from 7.9% to 3%
+    # of the replay's time). Every core that runs TotK has it (FEAT_LRCPC: Armv8.3, and Cortex-A55, A75 and later as an
+    # Armv8.2 extension). The generated code keeps the flags its differential tests ran with (it orders guest acquires
+    # and releases with sequentially consistent atomics, which stay LDAR and STLR either way).
+    RT_FLAGS[:] = ['-march=armv8.2-a+crc+rcpc' if f == '-march=armv8.2-a+crc' else f for f in RT_FLAGS]
     # -Bsymbolic: the runtime's own symbols bind inside the library; RELR packs the hundreds of thousands of RELATIVE
     # relocations of the lifted modules' function tables (the reason the Linux build links -no-pie).
     # No --gc-sections: hostfn.c finds the host-function tables only through __start_totk_ovr and friends, which keep

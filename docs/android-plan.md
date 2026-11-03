@@ -136,6 +136,15 @@ Done, and how it was checked:
   pools in uncached memory, LRZ off, GPL off, feedback loops off or restarted, ir3 without UBO-to-constant pushes,
   preambles or descriptor prefetch: none takes more than 6% off, most make it slower. The game's barriers are mostly
   `ORDER_FRAGMENTS | INVALIDATE_TEXTURE` (102 of 125 a frame): real dependencies.
+- The replay's walk, trimmed (2026-11-03; simpleperf on the replay thread, then alternating four-minute runs of the
+  native build, performance mode). The recorder thread slept between draws (after 4,096 spin hints, about 2 us), so
+  the replay woke it with a futex call at most draws and then waited at each part's end for the backlog; it now spins
+  up to 200 us before sleeping, and a sleeping recorder is woken once 16 KiB are queued. The runtime is built with
+  +rcpc (`tools/build_game.py`): its acquire loads were LDAR, which waits for the store-release the replay makes for
+  every packet it hands the recorder. `vk_usnap_find` caches the region of each 256-byte block it found in the
+  submission (about 6,000 finds a frame over 700 regions). The replay thread's cycles in a 12 s window fell 16%
+  (10.99 to 9.26 G); the walk from 8.75 / 8.47 ms to 6.89 / 6.95 ms, and the frame rate from 34.8 / 35.0 to
+  36.3 / 35.8 fps. The GPU's time after the last part grew from 14.2 to 15.2 ms: it gets the frame sooner.
 - So 40 fps needs about 4 ms off the chain in performance mode, and 60 fps needs the chain and the GPU both under
   16.7 ms. The GPU's share is close to what about 2,800 draws a frame cost on this GPU: what is left there is a few
   tenths of a millisecond each from barriers and state churn, and render scale (half scale saves about 2.3 ms). For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
@@ -148,8 +157,9 @@ Open, in order:
    3.5 ms of it behind the walk ([native-execution.md](native-execution.md), milestone 4). Next: resolution-independent
    GPU work, the fence write-back recorded with the rendering work; and 1.0.0's equipment cooldown fix for the
    real-time step.
-2. The replay (9 ms walk of one 770 KiB handle a frame): per-draw work, the recorder's ring and drains. Translating
-   the frame's big recording when it ends could save at most the GPU's 3.5 ms of idle time a frame.
+2. The replay (6.9 ms walk of one 770 KiB handle a frame since 2026-11-03, from 8.6): what is left of its CPU time is
+   spread over lookups that miss the cache (texture descriptors, programs' control blocks, pipeline binding lists).
+   Translating the frame's big recording when it ends could save at most the GPU's idle time behind the walk.
 3. GPU (19.3 ms, half of it the G-buffer's per-draw cost; section above): narrower barriers and less descriptor and
    dynamic-state churn (each worth a few tenths of a millisecond), render scale. Compression (UBWC) and load/store
    ops matter little while the frame is bound by draws rather than bandwidth.

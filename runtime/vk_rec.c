@@ -61,6 +61,7 @@ static uint64_t now_ns(void) { return plat_now_ns(); }
 // ---- consumer
 
 static void exec_packet(uint32_t op, void *p);
+#define SPIN_NS 200000ull   // rec_main: how long an idle recorder waits for packets before it sleeps
 
 static void rec_main(void *arg) {
     (void)arg;
@@ -69,7 +70,18 @@ static void rec_main(void *arg) {
     for (;;) {
         uint64_t h = __atomic_load_n(&head, __ATOMIC_ACQUIRE);
         if (t == h) {
-            for (int i = 0; i < 4096 && t == h; i++) plat_pause(), h = __atomic_load_n(&head, __ATOMIC_ACQUIRE);
+            // Spin up to SPIN_NS for the next packet before sleeping: the replay sends one every few microseconds
+            // while it walks, and a recorder that slept between draws had to be woken (a futex call on the replay)
+            // and held a backlog the replay then waited for at every part's end.
+            uint64_t t0 = 0;
+            for (int i = 0; t == h; i++) {
+                plat_pause(), h = __atomic_load_n(&head, __ATOMIC_ACQUIRE);
+                if ((i & 255) == 255) {
+                    uint64_t now = now_ns();
+                    if (!t0) t0 = now;
+                    else if (now - t0 >= SPIN_NS) break;
+                }
+            }
             if (t == h) {
                 __atomic_store_n(&sleeping, 1, __ATOMIC_SEQ_CST);
                 h = __atomic_load_n(&head, __ATOMIC_SEQ_CST);
@@ -92,8 +104,11 @@ static void rec_main(void *arg) {
 
 // ---- producer
 
+static uint64_t woke_h;   // put_h at the last wake (pub)
+
 static void wake(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    woke_h = put_h;
     if (__atomic_load_n(&sleeping, __ATOMIC_RELAXED)) plat_event_set(&wake_ev);
 }
 
@@ -123,9 +138,17 @@ static void *put(uint32_t op, size_t bytes) {
     return &ring[pos + 1];
 }
 
+// A sleeping recorder is woken once WAKE_WORDS have been queued since the last wake, not for every packet: when it
+// slept between draws (before rec_main spun for SPIN_NS), a wake at each draw cost the replay a futex call there, about
+// 3.5% of its CPU time on the AYN Thor. rec_drain and a full ring wake it at once; its timed wait bounds a missed wake.
+#define WAKE_WORDS 2048
+
 static void pub(void) {
     __atomic_store_n(&head, put_h, __ATOMIC_RELEASE);
-    if (__atomic_load_n(&sleeping, __ATOMIC_RELAXED)) plat_event_set(&wake_ev);
+    if (put_h - woke_h >= WAKE_WORDS && __atomic_load_n(&sleeping, __ATOMIC_RELAXED)) {
+        woke_h = put_h;
+        plat_event_set(&wake_ev);
+    }
 }
 
 void rec_drain(void) {

@@ -150,8 +150,8 @@ must check the slot is still empty when it creates each guest thread.
    - GPU work, measured per pass (2026-11-03, [android-plan.md](android-plan.md) "Clocks and heat" and after): half
      the GPU's time is the G-buffer's 2,130 draws at about 3 us each on Turnip, a cost of the draws themselves, so
      the GPU has a few tenths of a millisecond to give from barriers and state churn, and more only from render
-     scale. Next: the replay's walk (each millisecond off it shortens the frame while the GPU idles behind it), the
-     write-back as copies recorded with the work that renders those targets.
+     scale. The replay's walk then went from 8.6 to 6.9 ms (36 fps; [android-plan.md](android-plan.md)). Next: the
+     write-back as copies recorded with the work that renders those targets, and the walk's remaining cache misses.
 
 ## What to expect
 

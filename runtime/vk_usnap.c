@@ -45,6 +45,7 @@ static struct {
     int mode;                   // rt_knob: 0 off, 1 on, 2 ab
     int on;                     // this submission has a snapshot
     uint64_t fence, gen;
+    uint64_t no;                // submissions begun: the regions vk_usnap_find's cache holds indices of
     Arena *arena;
     Rng *col;                   // collected ranges
     int ncol, ccol;
@@ -219,7 +220,7 @@ static void summary(void) {
 
 void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence) {
     if (!U.mode) U.mode = rt_knob("UBO_SNAPSHOT", "1") + 1;   // stored +1: 0 is "not read yet"
-    U.on = 0, U.fence = fence, U.gen++;
+    U.on = 0, U.fence = fence, U.gen++, U.no++;
     summary();
     if (!RT_KNOB_ON(U.mode - 1)) {
         U.off_subs++;
@@ -279,7 +280,15 @@ static int first_above(uint64_t a) {
 
 int vk_usnap_find(uint64_t addr, uint64_t n, uint64_t align, VkDescriptorBufferInfo *out) {
     if (!U.on || !n) return 0;
-    int i = first_above(addr);
+    // About 6,000 finds a frame over about 700 regions, most of them for blocks bound before in the same submission: a
+    // direct-mapped cache by 256-byte block remembers the region that held it, valid for this submission's regions
+    // (U.no). A region that holds addr is the one first_above finds (the regions are disjoint and sorted).
+    static struct { uint64_t blk, no; int idx; } memo[1024];
+    uint64_t blk = addr / ALIGN;
+    typeof(memo[0]) *m = &memo[(blk * 0x9E3779B97F4A7C15ull) >> 54];
+    int i;
+    if (m->blk == blk && m->no == U.no && m->idx < U.nreg) i = m->idx;
+    else i = first_above(addr), m->blk = blk, m->no = U.no, m->idx = i;
     if (i >= U.nreg) return 0;
     const Reg *r = &U.reg[i];
     if (r->dropped || addr < r->lo || addr + n > r->hi) return 0;
