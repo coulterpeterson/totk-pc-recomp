@@ -305,9 +305,27 @@ static void *adreno_open(const char *path) {
 }
 #endif
 
+// TOTK_DRIVER_ENV=NAME=value;NAME=value (diagnostics): environment the driver reads when it loads, such as Turnip's
+// TU_DEBUG; set before the driver library is opened.
+static void driver_env(void) {
+    const char *e = cfg_get("TOTK_DRIVER_ENV");
+    if (!e || !*e) return;
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s", e);
+    char *save = NULL;
+    for (char *kv = strtok_r(buf, ";", &save); kv; kv = strtok_r(NULL, ";", &save)) {
+        char *eq = strchr(kv, '=');
+        if (!eq || eq == kv) { rt_log("gfx: driver_env: '%s' is not NAME=value", kv); continue; }
+        *eq = 0;
+        plat_setenv(kv, eq + 1);
+        rt_log("gfx: driver environment %s=%s", kv, eq + 1);
+    }
+}
+
 static int driver_load(void) {
     if (g_driver_tried) return g_driver_gipa != NULL;
     g_driver_tried = 1;
+    driver_env();
     const char *v = cfg_get("TOTK_VK_DRIVER");
     if (!v || !*v) return 0;
     char path[PLAT_PATH_MAX * 2], exe[PLAT_PATH_MAX * 2];

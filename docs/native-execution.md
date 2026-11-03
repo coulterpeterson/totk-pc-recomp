@@ -147,9 +147,11 @@ must check the slot is still empty when it creates each guest thread.
      The recording also holds what early translation would have to defer and check at the submit: 32 counter reports
      and 32 conditional renders (evaluated from guest memory when recorded), 245 deferred binds (read at the submit),
      the texture and sampler pools set by an earlier recording, and draws counted by occlusion queries reset there.
-   - Next, in order: GPU work that does not scale with resolution (20.9 ms a frame; 60 fps needs it under 16.7), the
-     replay's walk (each millisecond off it shortens the frame while the GPU idles behind it), the write-back as
-     copies recorded with the work that renders those targets ([android-plan.md](android-plan.md)).
+   - GPU work, measured per pass (2026-11-03, [android-plan.md](android-plan.md) "Clocks and heat" and after): half
+     the GPU's time is the G-buffer's 2,130 draws at about 3 us each on Turnip, a cost of the draws themselves, so
+     the GPU has a few tenths of a millisecond to give from barriers and state churn, and more only from render
+     scale. Next: the replay's walk (each millisecond off it shortens the frame while the GPU idles behind it), the
+     write-back as copies recorded with the work that renders those targets.
 
 ## What to expect
 

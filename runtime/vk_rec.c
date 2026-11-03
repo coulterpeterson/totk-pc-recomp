@@ -41,6 +41,21 @@ enum {
     R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
 };
 
+static const char *const rec_names[] = {
+    "pad", "BeginQuery", "BeginRendering", "BindDescriptorSets", "BindIndexBuffer", "BindPipeline", "BindVertexBuffers2",
+    "BlitImage", "ClearAttachments", "ClearColorImage", "ClearDepthStencilImage", "CopyBuffer", "CopyBufferToImage",
+    "CopyImage", "CopyImageToBuffer", "Dispatch", "DispatchIndirect", "Draw", "DrawIndexed", "DrawIndexedIndirect",
+    "EndQuery", "EndRendering", "FillBuffer", "PipelineBarrier2", "PushConstants", "ResetQueryPool", "ResolveImage",
+    "SetBlendConstants", "SetCullMode", "SetDepthBias", "SetDepthBiasEnable", "SetDepthCompareOp", "SetDepthTestEnable",
+    "SetDepthWriteEnable", "SetFrontFace", "SetPrimitiveRestartEnable", "SetPrimitiveTopology",
+    "SetRasterizerDiscardEnable", "SetScissorWithCount", "SetStencilCompareMask", "SetStencilOp", "SetStencilReference",
+    "SetStencilTestEnable", "SetStencilWriteMask", "SetViewportWithCount", "WriteTimestamp", "WriteTimestamp2",
+    "PushDescriptorSetWithTemplate", "PushDescriptorSet", "SetVertexInput", "SetDepthClampEnable/AlphaToCoverage",
+    "SetPolygonMode", "SetColorBlendEnable", "SetColorBlendEquation", "SetColorWriteMask", "EndCommandBuffer",
+};
+_Static_assert(sizeof rec_names / sizeof *rec_names == R_EndCb + 1, "one name per packet type");
+static uint64_t rs_op_n[R_EndCb + 1], rs_op_w[R_EndCb + 1];   // producer: packets and words by type
+
 static uint64_t now_ns(void) { return plat_now_ns(); }
 
 // ---- consumer
@@ -104,6 +119,7 @@ static void *put(uint32_t op, size_t bytes) {
     ring[pos] = (uint64_t)op | n << 32;
     put_h += n;
     RS_.packets++, RS_.words += n;
+    if (op <= R_EndCb) rs_op_n[op]++, rs_op_w[op] += n;
     return &ring[pos + 1];
 }
 
@@ -198,6 +214,24 @@ void rec_stats_log(void) {
            (unsigned long long)RS_.parts_on, (unsigned long long)RS_.parts, (unsigned long long)RS_.packets,
            RS_.words * 8 / 1048576.0, (unsigned long long)RS_.drains, (unsigned long long)RS_.fallbacks,
            RS_.drain_ns / 1e6, (unsigned long long)RS_.full_waits);
+    // The commands the ring carried, most frequent first, per draw (indexed, direct and indirect) and in bytes.
+    uint64_t draws = rs_op_n[R_DrawIndexed] + rs_op_n[R_Draw] + rs_op_n[R_DrawIndexedIndirect];
+    char line[1024];
+    size_t o = 0;
+    for (int k = 0; k < 14; k++) {
+        int best = -1;
+        for (int i = 1; i <= R_EndCb; i++)
+            if (rs_op_n[i] && (best < 0 || rs_op_n[i] > rs_op_n[best])) best = i;
+        if (best < 0) break;
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s%s %.2f (%.0f B)", k ? ", " : "", rec_names[best],
+                              draws ? (double)rs_op_n[best] / (double)draws : 0.0,
+                              (double)rs_op_w[best] * 8 / (double)rs_op_n[best]);
+        rs_op_n[best] = 0;
+        if (o >= sizeof line) break;
+    }
+    rt_log("vk_rec: per draw (%llu draws): %s", (unsigned long long)draws, line);
+    memset(rs_op_n, 0, sizeof rs_op_n);
+    memset(rs_op_w, 0, sizeof rs_op_w);
     memset(&RS_, 0, sizeof RS_);
 }
 

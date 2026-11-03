@@ -123,8 +123,22 @@ Done, and how it was checked:
   clocks unchanged: the scripted walk reaches a heavier view). Critical path there: interval 28.5-28.9 ms
   (34.7-35.2 fps), game threads running 22.1-23.2 ms, GPU 19.0 ms, replay 9.7 ms. `wait_spin = 50` gives nothing in
   performance mode either (34.3 and 34.1 fps against 35.2, 34.7 and 34.7).
+- GPU time by pass (2026-11-03, `trace = gpu`, `vk_gpuprof.c`; performance mode, the save outdoors, Turnip): about
+  19.3 ms of GPU work a frame. The G-buffer pass (1280x720, six colour targets and D32, about 2,130 draws in nine
+  segments) takes 9.4 ms, half of it; full barriers between passes 1.3 ms (about 225 a frame, 5.6 us each), clears
+  and dispatches 0.6 ms, the four shadow cascades (720x720 D16, 265 draws) 1.4 ms, and about 120 smaller passes the
+  rest. Turnip already renders in system memory (`driver_env = TU_DEBUG=sysmem` measures the same; forced GMEM tiling
+  takes 25 ms), and Qualcomm's own driver takes 23 ms.
+- The G-buffer is bound by the draws themselves, not by pixels, vertices or the driver's state processing: with one
+  pixel per draw it takes 9.6 ms, with one triangle per draw 6.9 ms, with zero indices 0.4 ms. A draw that runs any
+  shader work costs about 1.6 us of GPU time even with nothing changed from the previous one, and the state the game
+  changes between draws adds about 1.3 us (descriptor pushes about 13% of the pass, dynamic state about 9%). Placed
+  pools in uncached memory, LRZ off, GPL off, feedback loops off or restarted, ir3 without UBO-to-constant pushes,
+  preambles or descriptor prefetch: none takes more than 6% off, most make it slower. The game's barriers are mostly
+  `ORDER_FRAGMENTS | INVALIDATE_TEXTURE` (102 of 125 a frame): real dependencies.
 - So 40 fps needs about 4 ms off the chain in performance mode, and 60 fps needs the chain and the GPU both under
-  16.7 ms. For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
+  16.7 ms. The GPU's share is close to what about 2,800 draws a frame cost on this GPU: what is left there is a few
+  tenths of a millisecond each from barriers and state churn, and render scale (half scale saves about 2.3 ms). For play, 30 fps with the game's own pacing stays the default: uncapped frames between 25 and 33 ms pace
   unevenly, and the real-time step needs the equipment cooldown fix 1.0.0's patch table lacks.
 
 Open, in order:
@@ -136,8 +150,9 @@ Open, in order:
    real-time step.
 2. The replay (9 ms walk of one 770 KiB handle a frame): per-draw work, the recorder's ring and drains. Translating
    the frame's big recording when it ends could save at most the GPU's 3.5 ms of idle time a frame.
-3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
-   every pass, clears and discards as load and store ops, render scale.
+3. GPU (19.3 ms, half of it the G-buffer's per-draw cost; section above): narrower barriers and less descriptor and
+   dynamic-state churn (each worth a few tenths of a millisecond), render scale. Compression (UBWC) and load/store
+   ops matter little while the frame is bound by draws rather than bandwidth.
 4. 1.0.0's equipment cooldown fix; performance mode with the main and presenting threads on the X3.
 5. Start-up texture streaming on the presenting thread; the second screen's focus; a save importer.
 

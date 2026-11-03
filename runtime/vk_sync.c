@@ -18,6 +18,7 @@
 #include "host.h"
 #include "nvn_api.h"
 #include "vk.h"
+#include "vk_exec.h"
 #include "platform/platform.h"
 
 #define WEAK __attribute__((weak))
@@ -407,6 +408,7 @@ static VkCommandBuffer prologue(VkCtx *c, uint64_t fence) {
 VkCommandBuffer vk_sync_split(void) {
     VkCtx *c = vk_ctx();
     VkCommandBuffer cb = slots[cur_slot].cb;
+    vk_gp_part_end(cb, cur_fence);
     ts_end(cb, cur_fence);
     if (!rec_end_cb(cb, 0, 0)) vkEndCommandBuffer(cb);   // every command of the part is in cb, ended by its recorder
     vk_upload_flush(0);   // the uploads this part asked for precede it in queue order
@@ -468,8 +470,8 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
     int recorded = vk_exec_record(s->cb, handles, n, fence);
     if (pl_enabled() && n) pl[fence % PL_N].walk = kern_now_ns();
     s = &slots[cur_slot];   // the last part (vk_sync_split)
-    if (recorded) ts_end(s->cb, fence);
-    else ts_drop();
+    if (recorded) vk_gp_part_end(s->cb, fence), ts_end(s->cb, fence);
+    else vk_gp_part_drop(), ts_drop();
     // The recorder is done with the part: the end-of-submission crumb, then the end, by the recorder when it records.
     if (!rec_end_cb(s->cb, VK_CRUMB_SUBMIT_END, fence)) vkEndCommandBuffer(s->cb);
     perf_replay(t0);

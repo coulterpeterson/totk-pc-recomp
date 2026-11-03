@@ -313,6 +313,13 @@ adb shell mkdir -p /storage/emulated/0/Android/data/com.totkrecomp/files/native
 adb push build/v0-native/*.patched.bin build/v0-native/*.tsv /storage/emulated/0/Android/data/com.totkrecomp/files/native/
 ```
 
+Diagnostics for GPU work (`[diagnostics]` in `totk.ini`): `trace = gpu` logs GPU time per pass every 120 frames
+(`vk_gpuprof.c`: a timestamp at every full barrier, the table keyed by each pass's targets), one frame in 1200 segment
+by segment with every draw timed on its own, and the game's barriers by their NVN bits. `trace = perf` adds, per draw,
+the Vulkan commands the recorder carried. `driver_env = NAME=value;NAME=value` sets environment the GPU driver reads
+when it loads, such as Turnip's `TU_DEBUG` or ir3's `IR3_SHADER_DEBUG` (shaders the driver cached keep the old
+options: point `TOTK_PIPELINE_CACHE` at a new file in the same setting).
+
 On an AArch64 host, `--probe-exec` checks what running guest code natively needs: executable memory at a fixed
 address, x18 kept around a call, and the counter and thread registers at EL0 ([native-execution.md](native-execution.md)).
 

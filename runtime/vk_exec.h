@@ -141,6 +141,17 @@ int vk_exec_targets_recent(VkExec *ex, int any);
 // The current pass's targets with their formats, extents and the frames they were last rendered in (diagnostics).
 void vk_exec_targets_describe(VkExec *ex, char *buf, size_t cap);
 
+// TOTK_TRACE=gpu (vk_gpuprof.c): GPU time per pass. vk_gp_barrier: a full barrier is about to be recorded, outside any
+// pass; pass: it opens the pass whose targets ex holds. vk_sync.c: vk_gp_part_end before a part's last commands
+// (fence: the value whose completion covers it), vk_gp_part_drop when a part is not submitted.
+void vk_gp_barrier(VkExec *ex, int pass);
+// The game's barriers (OP_BARRIER) by NVNbarrierBits, logged with the pass table: in_pass, the barrier ends a pass;
+// redundant, nothing was recorded since the last full barrier.
+void vk_gp_nvn_barrier(int32_t bits, int in_pass, int redundant);
+void vk_gp_draw(VkExec *ex, uint32_t count, uint32_t instances);   // vk_exec_draw.c: after a draw's command
+void vk_gp_part_end(VkCommandBuffer cb, uint64_t fence);
+void vk_gp_part_drop(void);
+
 // TOTK_TRACE=gfx: replay counters of the current frame, logged and reset at each present (vk_exec_frame_log).
 typedef struct {
     uint64_t passes, draws_seen, draws, clears, copies, dispatches, submits;
