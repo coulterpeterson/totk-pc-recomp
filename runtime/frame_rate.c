@@ -171,6 +171,9 @@ double frame_step_limit_hz(void) {
 // ---- TOTK_TRACE=perf speed lines
 static uint64_t win_t0, win_frames, win_hist[4];   // win_hist: frames by present interval 1, 2, 3+ ([0] unused)
 static double win_game;
+// Display intervals (the pacer's slots) against the frame limit's period: within 2 ms of it, longer, shorter; the longest.
+static uint64_t win_on, win_long, win_short;
+static double win_max;
 static int probe = -1;
 static float last_pos[3];
 static uint64_t last_pos_ns;
@@ -204,7 +207,7 @@ static int player_pos(float xyz[3]) {
     return 0;
 }
 
-static void speed_report(uint64_t now, double step, int interval) {
+static void speed_report(uint64_t now, double step, int interval, double dt) {
     if (!win_t0) {
         win_t0 = now;
         return;
@@ -212,6 +215,13 @@ static void speed_report(uint64_t now, double step, int interval) {
     win_frames++;
     win_game += step;
     win_hist[interval < 1 ? 1 : interval > 3 ? 3 : interval]++;
+    double cap = (double)frame_step_cap_ns() * 1e-9;
+    if (dt > 0 && cap > 0) {
+        if (dt > cap + 0.002) win_long++;
+        else if (dt < cap - 0.002) win_short++;
+        else win_on++;
+        if (dt > win_max) win_max = dt;
+    }
     if (win_frames < 120) return;
     if (probe < 0) {
         const char *e = cfg_get("TOTK_SPEED_PROBE");
@@ -229,9 +239,12 @@ static void speed_report(uint64_t now, double step, int interval) {
         last_pos_ns = now;
     }
     if (step_word)
-        rt_log("fps: %llu frames in %.3f s (%.1f fps), %.3f s game stepped, speed %.3f; interval 1/2/3+ %llu/%llu/%llu%s",
+        rt_log("fps: %llu frames in %.3f s (%.1f fps), %.3f s game stepped, speed %.3f; interval 1/2/3+ %llu/%llu/%llu; "
+               "display at the limit's period/longer/shorter %llu/%llu/%llu, longest %.1f ms%s",
                (unsigned long long)win_frames, wall, (double)win_frames / wall, win_game, win_game / wall,
-               (unsigned long long)win_hist[1], (unsigned long long)win_hist[2], (unsigned long long)win_hist[3], pos);
+               (unsigned long long)win_hist[1], (unsigned long long)win_hist[2], (unsigned long long)win_hist[3],
+               (unsigned long long)win_on, (unsigned long long)win_long, (unsigned long long)win_short, win_max * 1e3,
+               pos);
     else
         rt_log("fps: %llu frames in %.3f s (%.1f fps), whole-vsync steps; interval 1/2/3+ %llu/%llu/%llu%s",
                (unsigned long long)win_frames, wall, (double)win_frames / wall, (unsigned long long)win_hist[1],
@@ -240,6 +253,7 @@ static void speed_report(uint64_t now, double step, int interval) {
     win_frames = 0;
     win_game = 0;
     memset(win_hist, 0, sizeof win_hist);
+    win_on = win_long = win_short = 0, win_max = 0;
 }
 
 static _Atomic int64_t world_us = -1;
@@ -289,5 +303,5 @@ void frame_step_present(uint64_t display_ns, int interval) {
     atomic_store_explicit(&game_us, atomic_load_explicit(&game_us, memory_order_relaxed) + (uint64_t)(game * 1e6 + 0.5),
                           memory_order_relaxed);
     world_clock(dt, step);
-    if (rt_trace & RT_TRACE_PERF) speed_report(display_ns, step, interval);
+    if (rt_trace & RT_TRACE_PERF) speed_report(display_ns, step, interval, dt);
 }

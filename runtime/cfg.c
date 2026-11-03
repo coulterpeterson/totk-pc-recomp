@@ -272,12 +272,12 @@ static const ProfileKey DECK[] = {
 };
 // Android handhelds (the AYN Thor and its peers: a phone SoC, its GPU sharing the RAM): the game in handheld mode,
 // which renders at the Switch's handheld resolution and asks the GPU for far less than docked, scaled to the screen by
-// the present; 30 fps with the game's own whole-vsync steps, as the Switch runs it (the real-time step also needs the
-// equipment cooldown fix, which 1.0.0's patch table lacks); fifo, the present mode every Android driver has; the
-// game pauses while the app is in the background, as on the Switch's Home screen; timestamp reports stamped when the
-// replay records them (vk_exec_xfer.c gpu_time_at_record).
+// the present; at most 40 fps with the real-time step (the Thor reaches it in performance mode; a 120 Hz panel shows
+// each frame for three refreshes, and a slower frame slows nothing down); fifo, the present mode every Android driver
+// has; the game pauses while the app is in the background, as on the Switch's Home screen; timestamp reports stamped
+// when the replay records them (vk_exec_xfer.c gpu_time_at_record).
 static const ProfileKey ANDROID[] = {
-    {"FULLSCREEN", "1"}, {"OPERATION_MODE", "handheld"}, {"FPS_LIMIT", "30"}, {"REALTIME", "0"},
+    {"FULLSCREEN", "1"}, {"OPERATION_MODE", "handheld"}, {"FPS_LIMIT", "40"},
     {"VK_PRESENT", "fifo"}, {"ASSUME_FOCUS", "0"}, {"GPU_TIME", "record"},
 };
 static const struct { const char *name; const ProfileKey *keys; size_t count; } PROFILES[] = {
