@@ -266,7 +266,9 @@ static const tex_t *tex_pin(const NVNtexture *nt) {
 // adding control memory again releases the copies recorded there without walking every live copy. 4 KiB pages cost
 // about 500 lookups per AddControlMemory under the exclusive lock (1.4.3 field: 53 calls a frame, 2 MiB ranges, 3.7
 // copies per page), and the recording threads waited on it.
-typedef struct { uint64_t magic, bytes, made_at, used_at, deferred; } copy_prefix;   // deferred: 0 unknown, 1 none, 2 some
+// deferred: 0 unknown, 1 none, 2 some. ended_ns: kern_now_ns at EndRecording; submits: QueueSubmitCommands calls that
+// named it (TOTK_TRACE=perf, nvn_handle_info)
+typedef struct { uint64_t magic, bytes, made_at, used_at, deferred, ended_ns, submits, pad_; } copy_prefix;
 _Static_assert(sizeof(copy_prefix) % 8 == 0, "records stay 8-byte aligned");
 typedef struct { uintptr_t lo, hi; uint8_t *copy; } cmd_copy;
 typedef struct { cmd_copy *v; uint32_t n, cap; } copy_bucket;
@@ -310,6 +312,11 @@ int nvn_handle_live(uint64_t handle) {
     return live;
 }
 
+void nvn_handle_info(uint64_t handle, uint64_t *ended_ns, uint64_t *submits) {
+    const copy_prefix *pf = (const copy_prefix *)(uintptr_t)handle - 1;   // live copies and per-submission clones alike
+    *ended_ns = pf->ended_ns, *submits = __atomic_load_n(&pf->submits, __ATOMIC_RELAXED);
+}
+
 uint64_t nvn_handle_bytes(uint64_t handle) {
     plat_mutex_lock_shared(&copy_lock);
     const copy_prefix *pf = copy_find(handle);
@@ -349,7 +356,7 @@ static uint8_t *flatten_recording(const uint8_t *p, size_t n) {
             break;
         }
     }
-    *(copy_prefix *)out = (copy_prefix){COPY_MAGIC, n, 0, 0};
+    *(copy_prefix *)out = (copy_prefix){COPY_MAGIC, n, 0, 0, .ended_ns = kern_now_ns()};
     return out + sizeof(copy_prefix);
 }
 
@@ -1012,6 +1019,7 @@ static int resolve_deferred(const uint8_t *p, int depth) {   // returns the numb
 void nvn_submit_prepare(const uint64_t *handles, int n) {
     uint64_t now = __atomic_add_fetch(&nsubmits, 1, __ATOMIC_RELAXED);
     for (int i = 0; i < n; i++) copy_touch(handles[i], now, "QueueSubmitCommands");
+    for (int i = 0; i < n; i++) __atomic_fetch_add(&((copy_prefix *)(uintptr_t)handles[i] - 1)->submits, 1, __ATOMIC_RELAXED);
     for (int i = 0; i < n; i++) resolve_deferred((const uint8_t *)(uintptr_t)handles[i], 0);
 }
 
@@ -1030,6 +1038,7 @@ void nvn_submit_prepare_async(const uint64_t *handles, uint64_t *out, int n) {
                      (unsigned long long)handles[i]);
         }
         out[i] = handles[i];
+        pf->submits++;
         if (pf->used_at > replayed && pf->used_at != now && pf->deferred != 1) {
             size_t sz = sizeof *pf + pf->bytes;
             copy_prefix *cl = malloc(sz);

@@ -132,9 +132,24 @@ must check the slot is still empty when it creates each guest thread.
      off. It now leaves the affinity alone; the frame rate did not move. With CPU 7 free the scheduler still puts the
      replay there about 5% of the time, and keeping the replay on it gave 11.9 ms against 12.1-12.3 ms: the replay is
      not bound by the core's clock, so the pin was not kept.
-   - Next, in order: the replay's latency and throughput (the GPU starts a frame's work only as the replay hands
-     parts over), the write-back as copies recorded with the work that renders those targets (no extra GPU round
-     trip at the fence), then GPU work that does not scale with resolution ([android-plan.md](android-plan.md)).
+   - The frame's command stream (2026-11-03, `trace = perf`; `vk_exec.c` logs every 900th submission's handles,
+     `vk_sync.c` splits the pipeline line into submissions with commands and empty ones). A frame is one submission
+     of one handle, about 770 KiB and 2,840 draws, which inherits only multisample state, plus an empty one (the
+     present). The main thread builds that handle from about 14 recordings it inlines with CallCommands; one of them,
+     recorded on a worker thread, is 630 KiB with about 2,600 draws and ends 5.5-9 ms before the main thread inlines
+     it, about 1 ms before the submit. The handle reaches the replay at once (queued 0.3 ms), its walk takes 9.0 ms
+     with parts handed over every 1.6 ms or so, and the GPU completes 16 ms after the last part: 25.4 ms from the
+     submit. The empty submission waits behind it (9.7 ms queued), which was the earlier 5 ms "queued" average.
+   - With splitting off (`split_draws = 0`, the whole frame handed over at once) the GPU takes 20.9 ms after the
+     submit: that is the frame's GPU time. The GPU's work is back-loaded (the walk's first 9 ms carry about 5 ms of it),
+     so it idles about 3.5 ms a frame while the walk feeds it. Translating the big recording when it ends, before the
+     submit, could at most remove that idle time: about 35 -> 40 fps, after which the GPU's 20.9 ms is the bound.
+     The recording also holds what early translation would have to defer and check at the submit: 32 counter reports
+     and 32 conditional renders (evaluated from guest memory when recorded), 245 deferred binds (read at the submit),
+     the texture and sampler pools set by an earlier recording, and draws counted by occlusion queries reset there.
+   - Next, in order: GPU work that does not scale with resolution (20.9 ms a frame; 60 fps needs it under 16.7), the
+     replay's walk (each millisecond off it shortens the frame while the GPU idles behind it), the write-back as
+     copies recorded with the work that renders those targets ([android-plan.md](android-plan.md)).
 
 ## What to expect
 

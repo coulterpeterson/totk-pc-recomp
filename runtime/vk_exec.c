@@ -899,6 +899,63 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
     }
 }
 
+// TOTK_TRACE=perf: every 900th submission and the five after it, one line per command handle: its size, draws and
+// dispatches, the time its replay took, how long before the replay its recording ended, how many submissions named it,
+// and the state its draws use without setting it first (inherited from earlier handles). The study for translating
+// handles when their recording ends (docs/native-execution.md).
+enum { HS_RT = 1, HS_PROG = 2, HS_TPOOL = 4, HS_SPOOL = 8, HS_VP = 16, HS_SC = 32, HS_VATTR = 64, HS_VSTREAM = 128,
+       HS_VBUF = 256, HS_STATE0 = 512 };   // HS_STATE0 << kind: OP_BIND_STATE kinds 0-6
+static void hs_scan(uint64_t handle, int *draws, int *disp, uint32_t *inh) {
+    uint32_t set = 0, need = 0;
+    *draws = *disp = 0;
+    for (const op_hdr *h = nvn_op_first(handle); h->op != OP_END; h = nvn_op_next(h)) {
+        const void *a = nvn_op_payload(h);
+        switch (h->op) {
+        case OP_SET_RT: set |= HS_RT; break;
+        case OP_BIND_PROGRAM: set |= HS_PROG; break;
+        case OP_SET_TEX_POOL: set |= HS_TPOOL; break;
+        case OP_SET_SAMP_POOL: set |= HS_SPOOL; break;
+        case OP_VIEWPORTS: set |= HS_VP; break;
+        case OP_SCISSOR: set |= HS_SC; break;
+        case OP_BIND_VATTR: set |= HS_VATTR; break;
+        case OP_BIND_VSTREAM: set |= HS_VSTREAM; break;
+        case OP_BIND_VBUF: set |= HS_VBUF; break;
+        case OP_BIND_STATE: {
+            int k = ((const p_bind_state *)a)->kind;
+            if (k >= 0 && k <= 6) set |= (uint32_t)HS_STATE0 << k;
+            break;
+        }
+        case OP_DRAW: case OP_DRAW_IDX: case OP_DRAW_IDX_IND:
+            ++*draws;
+            need |= ~set & (HS_RT | HS_PROG | HS_TPOOL | HS_SPOOL | HS_VP | HS_SC | HS_VATTR | HS_VSTREAM | HS_VBUF |
+                            (uint32_t)HS_STATE0 * 63);
+            break;
+        case OP_DISPATCH: case OP_DISPATCH_IND:
+            ++*disp;
+            need |= ~set & (HS_PROG | HS_TPOOL | HS_SPOOL);
+            break;
+        }
+    }
+    *inh = need;
+}
+static void hs_log(int sub, int i, uint64_t handle, uint64_t t0, uint64_t t1) {
+    int draws, disp;
+    uint32_t inh;
+    uint64_t ended, subs;
+    hs_scan(handle, &draws, &disp, &inh);
+    nvn_handle_info(handle, &ended, &subs);
+    static const char *const names[] = {"rt", "prog", "tpool", "spool", "vp", "sc", "vattr", "vstream", "vbuf",
+                                        "blend", "color", "chmask", "ms", "poly", "ds", "point"};
+    char list[160] = "";
+    size_t o = 0;
+    for (int b = 0; b < 16; b++)
+        if (inh & (1u << b)) o += (size_t)snprintf(list + o, sizeof list - o, "%s%s", o ? "," : "", names[b]);
+    rt_log("perf: handle sub %d #%d: %llu KiB, %d draws, %d dispatches, replay %.2f ms, ended %.2f ms before, "
+           "submitted %llu times, inherits %s", sub, i, (unsigned long long)(nvn_handle_bytes(handle) >> 10), draws,
+           disp, (double)(t1 - t0) / 1e6, ended && ended < t0 ? (double)(t0 - ended) / 1e6 : -1.0,
+           (unsigned long long)subs, o ? list : "-");
+}
+
 int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t fence) {
     VkExec *ex = &X;
     if (!x_ready) state_reset(ex), vk_dump_init(), x_ready = 1;
@@ -916,9 +973,13 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     part_t0 = kern_now_ns();
     x_here = 1;
     if (n) vk_mem_mirror_begin(), vk_usnap_begin(handles, n, fence);
+    static uint64_t hs_n;
+    int hs = (rt_trace & RT_TRACE_PERF) && n && (hs_n++ % 900) < 6;
     for (int i = 0; i < n; i++) {
         if (!handles[i]) rt_fatal("vk: command handle %d of a submission is null", i);
+        uint64_t t0 = hs ? kern_now_ns() : 0;
         walk(ex, nvn_op_first(handles[i]), 0);
+        if (hs) hs_log((int)(hs_n % 900), i, handles[i], t0, kern_now_ns());
     }
     vk_exec_pass_end(ex);
     x_here = 0;

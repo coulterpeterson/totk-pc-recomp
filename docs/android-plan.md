@@ -130,10 +130,12 @@ Done, and how it was checked:
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game
    threads' CPU, but the frame stays near 28 ms: it is bound by the graphics pipeline, the game waiting for GPU fences
-   behind the replay (10-11 ms) and the GPU (17-19 ms). Next: the replay's latency and throughput, the fence
-   write-back recorded with the rendering work, then resolution-independent GPU work; and 1.0.0's equipment cooldown
-   fix for the real-time step.
-2. The replay (10-12 ms, off the chain with asynchronous replay): per-draw work, the recorder's ring and drains.
+   behind the replay (9 ms walk) and the GPU, which needs 20.9 ms for a frame handed over at once and idles about
+   3.5 ms of it behind the walk ([native-execution.md](native-execution.md), milestone 4). Next: resolution-independent
+   GPU work, the fence write-back recorded with the rendering work; and 1.0.0's equipment cooldown fix for the
+   real-time step.
+2. The replay (9 ms walk of one 770 KiB handle a frame): per-draw work, the recorder's ring and drains. Translating
+   the frame's big recording when it ends could save at most the GPU's 3.5 ms of idle time a frame.
 3. GPU: images created mutable without a format list (likely no UBWC compression on Turnip), the full barrier before
    every pass, clears and discards as load and store ops, render scale.
 4. 1.0.0's equipment cooldown fix; performance mode with the main and presenting threads on the X3.

@@ -97,6 +97,8 @@ static inline const op_hdr *nvn_op_next(const op_hdr *h) { return (const op_hdr 
 static inline const void *nvn_op_payload(const op_hdr *h) { return h + 1; }
 int nvn_handle_live(uint64_t handle);                      // 1 while the handle's copy exists (its control memory was
                                                            // not added again)
+// TOTK_TRACE=perf: when the handle's recording ended (kern_now_ns) and how many submissions named it so far
+void nvn_handle_info(uint64_t handle, uint64_t *ended_ns, uint64_t *submits);
 uint64_t nvn_handle_bytes(uint64_t handle);                // bytes of the copy, OP_BEGIN to OP_END; 0 if not live
 uint64_t nvn_submit_count(void);                           // QueueSubmitCommands calls so far
 const char *nvn_op_name(uint32_t op);                      // "DRAW_IDX", ...; "?" past OP_COUNT_

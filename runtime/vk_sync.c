@@ -245,11 +245,13 @@ WEAK int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint
 
 // ---- TOTK_TRACE=perf: where a submission's time goes between the game's submit and its completion (queued for the
 // replay, replayed, on the GPU after its last part was submitted), and how far behind the newest submission the fences
-// threads wait for are. One line every PL_LOG completed submissions.
+// threads wait for are. Submissions with commands are split into the walk of their ops (vk_exec_record) and the rest
+// (the recorder finishing the last part, uploads, the submit); empty ones (presents, fence-only submits) are counted
+// apart. One line every PL_LOG completed submissions.
 #define PL_N 4096
 #define PL_LOG 512
-static struct { uint64_t enq, rep0, sub; } pl[PL_N];   // by value % PL_N
-static uint64_t pl_q, pl_r, pl_g, pl_n, pl_waits, pl_wait_ns, pl_lag[4];
+static struct { uint64_t enq, rep0, walk, sub; } pl[PL_N];   // by value % PL_N; walk 0: no commands
+static uint64_t pl_q, pl_w, pl_r, pl_g, pl_n, pl_eq, pl_eg, pl_en, pl_waits, pl_wait_ns, pl_lag[4];
 static int pl_on = -1;
 static int pl_enabled(void) {
     if (pl_on < 0) pl_on = (rt_trace & RT_TRACE_PERF) != 0;
@@ -261,17 +263,23 @@ static void pl_done(uint64_t from, uint64_t to) {   // st_lock held: values from
     for (uint64_t v = from + 1; v <= to; v++) {
         typeof(pl[0]) *e = &pl[v % PL_N];
         if (e->sub && e->rep0 && e->enq && e->rep0 >= e->enq && e->sub >= e->rep0 && now >= e->sub) {
-            pl_q += e->rep0 - e->enq, pl_r += e->sub - e->rep0, pl_g += now - e->sub, pl_n++;
+            if (e->walk >= e->rep0 && e->sub >= e->walk)
+                pl_q += e->rep0 - e->enq, pl_w += e->walk - e->rep0, pl_r += e->sub - e->walk, pl_g += now - e->sub, pl_n++;
+            else
+                pl_eq += e->rep0 - e->enq, pl_eg += now - e->sub, pl_en++;
         }
-        e->enq = e->rep0 = e->sub = 0;
+        e->enq = e->rep0 = e->walk = e->sub = 0;
     }
-    if (pl_n >= PL_LOG) {
-        rt_log("vk: pipeline per submission (%llu): queued %.2f ms, replayed %.2f ms, GPU after its last part %.2f ms; "
-               "fence waits %llu, avg %.2f ms, submissions behind the newest 0/1/2/3+: %llu/%llu/%llu/%llu",
-               (unsigned long long)pl_n, pl_q / 1e6 / pl_n, pl_r / 1e6 / pl_n, pl_g / 1e6 / pl_n,
-               (unsigned long long)pl_waits, pl_waits ? pl_wait_ns / 1e6 / pl_waits : 0.0, (unsigned long long)pl_lag[0],
-               (unsigned long long)pl_lag[1], (unsigned long long)pl_lag[2], (unsigned long long)pl_lag[3]);
-        pl_q = pl_r = pl_g = pl_n = pl_waits = pl_wait_ns = 0;
+    if (pl_n + pl_en >= PL_LOG) {
+        uint64_t n = pl_n ? pl_n : 1, en = pl_en ? pl_en : 1;
+        rt_log("vk: pipeline per submission with commands (%llu): queued %.2f ms, walked %.2f ms, then submitted after "
+               "%.2f ms, GPU after its last part %.2f ms; empty (%llu): queued %.2f ms, GPU after %.2f ms; fence waits "
+               "%llu, avg %.2f ms, submissions behind the newest 0/1/2/3+: %llu/%llu/%llu/%llu", (unsigned long long)pl_n,
+               pl_q / 1e6 / n, pl_w / 1e6 / n, pl_r / 1e6 / n, pl_g / 1e6 / n, (unsigned long long)pl_en, pl_eq / 1e6 / en,
+               pl_eg / 1e6 / en, (unsigned long long)pl_waits, pl_waits ? pl_wait_ns / 1e6 / pl_waits : 0.0,
+               (unsigned long long)pl_lag[0], (unsigned long long)pl_lag[1], (unsigned long long)pl_lag[2],
+               (unsigned long long)pl_lag[3]);
+        pl_q = pl_w = pl_r = pl_g = pl_n = pl_eq = pl_eg = pl_en = pl_waits = pl_wait_ns = 0;
         memset(pl_lag, 0, sizeof pl_lag);
     }
 }
@@ -458,6 +466,7 @@ uint64_t vk_sync_submit(const uint64_t *handles, int n) {
     ts_begin(s->cb);
     rec_begin(s->cb);
     int recorded = vk_exec_record(s->cb, handles, n, fence);
+    if (pl_enabled() && n) pl[fence % PL_N].walk = kern_now_ns();
     s = &slots[cur_slot];   // the last part (vk_sync_split)
     if (recorded) ts_end(s->cb, fence);
     else ts_drop();
