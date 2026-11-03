@@ -144,6 +144,16 @@ int probe_cfg(void) {
     CHECK(m && EQ(m->def, "off") && EQ(m->values, "off|fps|full") && m->live, "meta: perf_overlay is live, off by default");
     CHECK(cfg_meta("BIND_A") == NULL && cfg_meta("FPS_COUNTER") == NULL && cfg_meta("NO_SUCH") == NULL,
           "meta: keys the menu does not show are NULL");
+    // cfg_default: the device profile's value, else one that follows another setting, else the table's
+    CHECK(EQ(cfg_default("TOTK_RUMBLE_STRENGTH"), "130") && cfg_default("NO_SUCH") == NULL, "default: the table's");
+    if (strcmp(cfg_device_profile(), "deck")) {   // the Steam Deck's profile sets a game resolution of its own
+        plat_setenv("TOTK_OPERATION_MODE", "handheld");
+        CHECK(EQ(cfg_value("TOTK_OUTPUT_RES"), "1280x720") && EQ(cfg_default("OUTPUT_RES"), "1280x720") &&
+              !cfg_is_set("TOTK_OUTPUT_RES"), "default: handheld mode's game resolution is 1280x720");
+        plat_setenv("TOTK_OPERATION_MODE", "docked");
+        CHECK(EQ(cfg_value("TOTK_OUTPUT_RES"), "1920x1080"), "default: the docked game resolution is 1920x1080");
+        plat_setenv("TOTK_OPERATION_MODE", NULL);
+    }
 
     // cfg_reset: the key's active lines leave totk.ini, the commented example stays
     static const char rbase[] = "[audio]\n# volume = 100\n[input]\nmotion = 0\n";

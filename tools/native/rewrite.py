@@ -64,12 +64,17 @@ def main():
     table = patches.load(ROOT / 'recomp' / f'patches-{a.version}.txt', layout(exefs, 'android'))
     spins = out / 'spins.tsv'
     spins.write_text(''.join(f'{m} {b:x} {h:x}\n' for m, edges in table.spins.items() for b, h in sorted(edges.items())))
+    # The loader sets one word per site; a set with a longer replacement anywhere (an inlined veneer: the hair and
+    # cloth clock) stays out whole, so no set half-applies. Its switch then does nothing in the native build.
+    lifted_only = {k for sites in table.sites.values() for alts in sites.values() for k, repl, _ in alts if len(repl) != 1}
+    for k in sorted(lifted_only):
+        print(f'set {table.sets[k][0]}: sites of several words, lifted code only')
     rows = []
     for m, sites in table.sites.items():
         for off, alts in sorted(sites.items()):
             for k, repl, orig in alts:
-                if len(repl) != 1:
-                    raise SystemExit(f'{m}+{off:#x}: a patch site of {len(repl)} words; native execution patches one')
+                if k in lifted_only:
+                    continue
                 w = repl[0]
                 rows.append(f'{k}\t{m}\t{off:x}\t{orig:08x}\t' + (f'page:x{w[1]}' if isinstance(w, tuple) else f'{w:08x}'))
     env = dict(os.environ, DM_RULESET='native', DM_PRIVATE_GATES='0', DM_SPINS=str(spins))
@@ -84,7 +89,8 @@ def main():
 
     for m in MODULES:   # a patch site must still hold its original word: the rewrite may not have moved it
         rewritten = {int(l.split()[0], 16) for l in (out / f'{m}.sites.tsv').read_text().splitlines() if l.split()[1] != 'J'}
-        clash = sorted(off for off in table.sites.get(m, {}) if off in rewritten)
+        clash = sorted(off for off, alts in table.sites.get(m, {}).items()
+                       if off in rewritten and any(k not in lifted_only for k, _, _ in alts))
         if clash:
             raise SystemExit(f'{m}: patch sites {[hex(x) for x in clash]} are rewrite sites')
     (out / 'patchsites.tsv').write_text(

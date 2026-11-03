@@ -333,13 +333,32 @@ static const char *raw_get(const char *name) {
     return NULL;
 }
 
+static const char *profile_value(const char *key) {
+    const ProfileKey *keys = PROFILES[profile_of()].keys;
+    for (size_t i = 0; i < PROFILES[profile_of()].count; i++)
+        if (!strcasecmp(keys[i].key, key)) return keys[i].value;
+    return NULL;
+}
+
+// Defaults that follow another setting, below the device profile: in handheld mode the game's own picture is 1280x720
+// (it draws it in the top left of its 1920x1080 canvas), so that is the game resolution there (resolution.c decide).
+static const char *derived_default(const char *key) {
+    if (!strcasecmp(key, "OUTPUT_RES") && !strcmp(cfg_value(PREFIX "OPERATION_MODE"), "handheld")) return "1280x720";
+    return NULL;
+}
+
 const char *cfg_get(const char *name) {
     const char *v = raw_get(name);
     if (v || strncmp(name, PREFIX, PREFIX_LEN)) return v;
-    const ProfileKey *keys = PROFILES[profile_of()].keys;
-    for (size_t i = 0; i < PROFILES[profile_of()].count; i++)
-        if (!strcasecmp(keys[i].key, name + PREFIX_LEN)) return keys[i].value;
-    return NULL;
+    v = profile_value(name + PREFIX_LEN);
+    return v ? v : derived_default(name + PREFIX_LEN);
+}
+
+const char *cfg_default(const char *name) {
+    const char *key = strncmp(name, PREFIX, PREFIX_LEN) ? name : name + PREFIX_LEN, *v = profile_value(key);
+    if (!v) v = derived_default(key);
+    const CfgMeta *m = v ? NULL : cfg_meta(key);
+    return v ? v : m ? m->def : NULL;
 }
 
 // Whether name's value comes from the player (the environment or totk.ini), not a profile or the table.

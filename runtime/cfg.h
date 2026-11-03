@@ -2,8 +2,9 @@
 #pragma once
 
 // getenv for a setting: the environment variable when set, else the totk.ini key (the name without "TOTK_", any
-// case), else the device profile's default (cfg.c: the Steam Deck), else NULL. Same string semantics as getenv; the pointer stays valid for the process (a value cfg_set replaces
-// is kept). A name without the TOTK_ prefix goes to getenv unchanged. Safe from any thread once cfg_init has returned.
+// case), else the device profile's default (cfg.c: the Steam Deck, Android), else a default that follows another setting
+// (cfg_default), else NULL. Same string semantics as getenv; the pointer stays valid for the process (a value cfg_set
+// replaces is kept). A name without the TOTK_ prefix goes to getenv unchanged. Safe from any thread once cfg_init has returned.
 const char *cfg_get(const char *name);
 
 // Reads totk.ini once, from mem_init after the address space is claimed and before any setting is read. Logs the file, its key count, unknown keys and environment overrides.
@@ -21,9 +22,9 @@ void cfg_set(const char *name, const char *value);
 unsigned cfg_version(void);
 // 1 when the environment sets name: cfg_set cannot change what cfg_get returns (the menu greys the setting out).
 int cfg_from_env(const char *name);
-// 1 when the player set name (the environment or totk.ini), 0 when cfg_get gives a device profile's default or NULL.
+// 1 when the player set name (the environment or totk.ini), 0 when cfg_get gives a default (cfg_default) or NULL.
 int cfg_is_set(const char *name);
-// The device profile in use, "deck" or "desktop" (TOTK_DEVICE_PROFILE, else what the machine is).
+// The device profile in use, "deck", "android" or "desktop" (TOTK_DEVICE_PROFILE, else what the machine is).
 const char *cfg_device_profile(void);
 // Writes the keys cfg_set changed since the last save into totk.ini next to totk.exe (cfg_save_to: the file at path).
 // Only those lines change: the last line of a changed key gets the new value, a missing key goes under its section
@@ -51,9 +52,14 @@ const CfgMeta *cfg_meta(const char *key);
 // The i-th row (0-based, table order); NULL past the last.
 const CfgMeta *cfg_meta_at(int i);
 
-// The setting's value for consumers: the environment or totk.ini value, else the CfgMeta default. name has the TOTK_
-// prefix, like cfg_get; a name without a row is a bug (rt_fatal). A row with an empty default has no fixed value: its
-// consumer reads cfg_get and keeps its own "unset" branch. An empty value counts as unset.
+// The value a setting has when the player sets nothing: the device profile's, a default that follows another setting
+// (the game resolution in handheld mode), else the CfgMeta default; NULL for a key without a row. name: with or
+// without the TOTK_ prefix. The menu marks this value "default".
+const char *cfg_default(const char *name);
+// The setting's value for consumers: cfg_get (the environment, totk.ini, then cfg_default's profile and derived
+// values), else the CfgMeta default. name has the TOTK_ prefix, like cfg_get; a name without a row is a bug
+// (rt_fatal). A row with an empty default has no fixed value: its consumer reads cfg_get and keeps its own "unset"
+// branch. An empty value gives the CfgMeta default.
 const char *cfg_value(const char *name);
 // cfg_value parsed. A set value that does not parse (int: whole string; double: strtod) gives the default's number.
 // cfg_bool: "0" is false, anything else true.

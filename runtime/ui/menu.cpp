@@ -450,6 +450,7 @@ static void list_gpus(VkInstance inst) {
     g_gpu_n = (int)n;
 }
 
+#ifndef __ANDROID__
 // Window sizes: the common 16:9 sizes that fit the monitor, the 1920x1080 default and the current size.
 static const int kSizes[][2] = {{1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800},
                                 {3840, 2160}};
@@ -483,6 +484,7 @@ static void row_window_size(void) {
     }
     opt_choice_list("TOTK_WINDOW_SIZE", UI_MENU_WINDOW_SIZE, pv, pn, n, UI_MENU_WINDOW_SIZE_DESC);
 }
+#endif
 
 // The game resolution (resolution.c): 16:9 sizes from its smallest, 1280x720 (for weak GPUs), up, the common 21:9 and
 // 32:9 monitor sizes and the 16:10 screens of the Steam Deck, handhelds and laptops (the camera and the HUD follow
@@ -647,7 +649,9 @@ static void rows_color(void) {
 static void tab_screen(float scale) {
     opt_begin("##screen", scale);
     opt_toggle("TOTK_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
+#ifndef __ANDROID__   // on Android the window is the screen
     row_window_size();
+#endif
     static const UiTextId present[] = {UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE};
     opt_choice("TOTK_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
     row_gpu();

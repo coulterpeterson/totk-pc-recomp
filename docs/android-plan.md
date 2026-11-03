@@ -166,8 +166,16 @@ Done, and how it was checked:
   present times, 120 Hz) 71% of frames show for three refreshes, 17% for four and 12% for two: a frame the GPU
   finishes late is shown a refresh late and the next one on time. Keeping the pacer's phase or not made no
   difference there; evening it out needs the display's present times fed back (`VK_GOOGLE_display_timing`, as
-  Android's frame pacing library does). Still missing in 1.0.0: the hair and cloth clock (patches-v121.txt `cloth`;
-  its words and registers differ), so hair and cloth move a third faster at 40 fps.
+  Android's frame pacing library does).
+- Hair and cloth on the clock (2026-11-03): 1.0.0's `cloth` set (`recomp/patches-v0.txt`), located by the clock's
+  shape, since its words differ from 1.2.1's: the animation update builds {seconds = factor / 30, ratio = factor}
+  twice inline at main+0x7b5988 and main+0x7b6b28, once at main+0x7f5ec4, and hands it to the shared update
+  main+0x82c224 at main+0x7b6358. The sites are veneers of several words, which the native build cannot take
+  (`tools/native/rewrite.py` leaves the set out there), so this is the lifted build's. The settings menu now marks the
+  device profile's values "default" (`cfg_default`), and in handheld mode the game resolution is the game's own
+  1280x720 rather than the docked 1920x1080 it used to show (the game draws its handheld picture in the top left of
+  its 1920x1080 canvas; `runtime/resolution.c` takes the mode's own sizes). On Android the menu leaves out the window
+  size, as the window is the screen.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game
@@ -175,14 +183,15 @@ Open, in order:
    behind the replay and the GPU, which needs 20.9 ms for a frame handed over at once (milestone 4 of
    [native-execution.md](native-execution.md)). With the replay's walk trimmed and the fence write-back recorded with
    the rendering (2026-11-03) the save runs at 40 fps uncapped, and the Android profile plays at a 40 fps cap. Next:
-   1.0.0's hair and cloth clock, frame pacing from display timing, barriers and state churn on the GPU.
+   frame pacing from display timing, barriers and state churn on the GPU.
 2. The replay (6.9 ms walk of one 770 KiB handle a frame since 2026-11-03, from 8.6): what is left of its CPU time is
    spread over lookups that miss the cache (texture descriptors, programs' control blocks, pipeline binding lists).
    Translating the frame's big recording when it ends could save at most the GPU's idle time behind the walk.
 3. GPU (19.3 ms, half of it the G-buffer's per-draw cost; section above): narrower barriers and less descriptor and
    dynamic-state churn (each worth a few tenths of a millisecond), render scale. Compression (UBWC) and load/store
    ops matter little while the frame is bound by draws rather than bandwidth.
-4. 1.0.0's hair and cloth clock for the real-time step; performance mode with the main and presenting threads on the X3.
+4. Performance mode with the main and presenting threads on the X3; the hair and cloth clock in the native build
+   (veneers of several words, which its single-word patch sites cannot hold).
 5. Start-up texture streaming on the presenting thread; the second screen's focus; a save importer.
 
 ## 0. Starting point

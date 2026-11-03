@@ -5,10 +5,15 @@
 // MacNativeGames contributors) make the game read both sizes from the patch page, and the texture heap that holds the
 // output- and scene-sized render targets grows with them.
 //
-// Settings, read at start: TOTK_OUTPUT_RES = <w>x<h> (default 1920x1080, the game's own), TOTK_RENDER_SCALE = the
-// scene's size relative to the output: "game" (default, 5/6, the game's 1600x900 at 1080p) or a percentage; above 100
+// Settings, read at start: TOTK_OUTPUT_RES = <w>x<h> (default the game's own: 1920x1080 docked, 1280x720 in handheld
+// mode, cfg.c derived_default), TOTK_RENDER_SCALE = the scene's size relative to the output: "game" (default, the
+// game's own share: 5/6 docked, its 1600x900 at 1080p, the whole output in handheld mode) or a percentage; above 100
 // the game supersamples its scene, which smooths edges (anti-aliasing) at the cost of GPU time. The game's own final
 // pass (FSR 1 EASU) scales the scene to the output; the present scales the output to the window (vk_fsr.c).
+//
+// In handheld mode the game draws a 1280x720 picture in the top left of its 1920x1080 canvas, with a 1280x720 scene
+// (1.0.0 on the AYN Thor: the present's crop and the G-buffer). The output and scene patches replace the sizes of both
+// modes, so another size there patches like a docked one.
 //
 // Patch page: +16 the scene size {w, h} as floats, +32 the output size and +48 the swapchain size as {w, h} in one
 // 64-bit word, +40 the renderer (1.2.1) or display configuration (1.4.3) the patched code stores there.
@@ -36,11 +41,14 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "ov.h"
 
 #define BASE_W 1920
 #define BASE_H 1080
 #define SCENE_W 1600
 #define SCENE_H 900
+#define HANDHELD_W 1280      // the handheld picture and its scene
+#define HANDHELD_H 720
 #define DTA_KIB 113664u      // DynamicTextureAllocatorMem, shipped
 #define SCENE_MAX 4096       // per side, as MacNativeGames' TOTK_RENDER_RES
 #define SHADOW_BASE 960      // the sun shadow map's base size (its cascades: a D16 array of 4 layers)
@@ -48,7 +56,8 @@
 static struct {
     int decided;
     unsigned ow, oh, sw, sh;   // output and scene
-    int scene_set;             // the scene differs from the game's 5/6 of the output
+    unsigned own[4];           // the game's own output and scene for the console mode: {w, h, scene w, scene h}
+    int scene_set;             // the scene differs from the game's own share of the output
     int heapdef_ok;            // romfs.c serves the grown HeapDef
     int on;                    // res_init switched the patch sets on
     unsigned shadow;           // fixed sun shadow map size (TOTK_SHADOW_RES), 0: the game's own
@@ -58,8 +67,12 @@ static struct {
 static void decide(void) {
     if (R.decided) return;
     R.decided = 1;
-    R.ow = BASE_W;
-    R.oh = BASE_H;
+    int hh = ov_handheld();
+    double k = hh ? 1.0 : 5.0 / 6.0;   // the scene's share of the output, the game's own
+    R.own[0] = hh ? HANDHELD_W : BASE_W, R.own[1] = hh ? HANDHELD_H : BASE_H;
+    R.own[2] = hh ? HANDHELD_W : SCENE_W, R.own[3] = hh ? HANDHELD_H : SCENE_H;
+    R.ow = R.own[0];
+    R.oh = R.own[1];
     const char *o = cfg_value("TOTK_OUTPUT_RES");
     unsigned w = 0, h = 0;
     char tail;
@@ -67,10 +80,9 @@ static void decide(void) {
         R.ow = w & ~1u;
         R.oh = h & ~1u;
     } else {
-        rt_log("resolution: TOTK_OUTPUT_RES=%s is not <width>x<height> in 1280x720..7680x4320; 1920x1080", o);
+        rt_log("resolution: TOTK_OUTPUT_RES=%s is not <width>x<height> in 1280x720..7680x4320; %ux%u", o, R.ow, R.oh);
     }
     const char *s = cfg_value("TOTK_RENDER_SCALE");
-    double k = 5.0 / 6.0;
     const char *m = cfg_value("TOTK_DLSS");   // a DLSS mode other than dlaa sets the scene size
     static const struct { const char *name; double k; } dlss[] = {
         {"quality", 2.0 / 3.0}, {"balanced", 0.58}, {"performance", 0.5}};
@@ -111,7 +123,7 @@ static uint64_t shadow_kib(void) {
 
 static int bigger(void) {
     decide();
-    return R.ow != BASE_W || R.oh != BASE_H || R.scene_set || shadow_kib();
+    return R.ow != R.own[0] || R.oh != R.own[1] || R.scene_set || shadow_kib();
 }
 
 uint64_t res_heap_extra_kib(void) {
@@ -256,7 +268,7 @@ static void res_shadow_range(void) {
 void res_init(void) {
     res_shadow_range();
     if (!bigger()) {
-        rt_log("resolution: the game's own (output 1920x1080, scene 1600x900)");
+        rt_log("resolution: the game's own (output %ux%u, scene %ux%u)", R.own[0], R.own[1], R.own[2], R.own[3]);
         shadow_init(rt_patch_page());
         return;
     }
@@ -272,14 +284,14 @@ void res_init(void) {
     }
     uint8_t *page = rt_patch_page();
     double k = RT_V143 ? (double)R.ow / BASE_W : 1.0;   // 1.4.3's own scaling of the scene with the output width
-    int scene_on = R.scene_set || (!RT_V143 && (R.ow != BASE_W || R.oh != BASE_H));
+    int scene_on = R.scene_set || (!RT_V143 && (R.ow != R.own[0] || R.oh != R.own[1]));
     float sc[2] = {(float)(R.sw / k), (float)(R.sh / k)};
     uint64_t out = pack(R.ow, R.oh), none = 0;
     memcpy(page + 16, sc, sizeof sc);
     memcpy(page + 32, &out, 8);
     memcpy(page + 40, &none, 8);
     memcpy(page + 48, &out, 8);
-    rt_patch_switch(output, R.ow != BASE_W || R.oh != BASE_H);
+    rt_patch_switch(output, R.ow != R.own[0] || R.oh != R.own[1]);
     rt_patch_switch(scene, scene_on);
     R.on = 1;
     // Another shape than 16:9 (more than 1% off): the camera takes the output's ratio (recomp/patches-v121.txt and
@@ -302,7 +314,7 @@ void res_init(void) {
     }
     shadow_init(page);
     rt_log("resolution: output %ux%u, scene %ux%u%s; texture heap +%llu KiB", R.ow, R.oh, R.sw, R.sh,
-           scene_on ? "" : " (the game's own 5/6 of the output)", (unsigned long long)res_heap_extra_kib());
+           scene_on ? "" : " (the game's own share of the output)", (unsigned long long)res_heap_extra_kib());
 }
 
 // DLSS upscaling: textures are sampled for the output's resolution, not the scene's (NVIDIA's DLSS guide: a mip bias
@@ -354,6 +366,6 @@ void res_wanted(unsigned out[2]) {
 
 void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
-    out[0] = R.on ? R.ow : BASE_W, out[1] = R.on ? R.oh : BASE_H;
-    scene[0] = R.on ? R.sw : SCENE_W, scene[1] = R.on ? R.sh : SCENE_H;
+    out[0] = R.on ? R.ow : R.own[0], out[1] = R.on ? R.oh : R.own[1];
+    scene[0] = R.on ? R.sw : R.own[2], scene[1] = R.on ? R.sh : R.own[3];
 }

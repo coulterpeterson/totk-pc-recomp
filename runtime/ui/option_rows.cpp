@@ -261,8 +261,8 @@ int opt_save_tick(int force) {
 // ---- rows
 
 bool opt_toggle(const char *key, UiTextId label, UiTextId desc, bool inverted) {
-    const CfgMeta *m = cfg_meta(key);
-    bool set = cfg_bool(key) != 0, def = m && strcmp(m->def, "0") != 0;
+    const char *dv = cfg_default(key);
+    bool set = cfg_bool(key) != 0, def = dv && strcmp(dv, "0") != 0;
     bool on = set != inverted;   // what the row shows
     RowView v = {menu_text(on ? UI_MENU_ON : UI_MENU_OFF), set == def, false, NULL};
     if (!row(key, label, desc, v)) return false;   // any step flips it
@@ -309,14 +309,13 @@ void opt_text(UiTextId text, bool warn) {
 
 bool opt_choice_list(const char *key, UiTextId label, const char *const *values, const char *const *names, int n,
                      UiTextId desc, int cur, const char *note) {
-    const CfgMeta *m = cfg_meta(key);
-    const char *now = cfg_value(key);
+    const char *now = cfg_value(key), *dv = cfg_default(key);   // the device profile's value counts as the default
     if (cur < 0)
         for (int i = 0; i < n; i++)
             if (!strcmp(values[i], now)) cur = i;
     int def = -1;
-    for (int i = 0; m && i < n; i++)
-        if (!strcmp(values[i], m->def)) def = i;
+    for (int i = 0; dv && i < n; i++)
+        if (!strcmp(values[i], dv)) def = i;
     RowView v = {cur >= 0 ? names[cur] : now, cur == def, true, note};
     int step = row(key, label, desc, v);
     if (!step || n <= 0) return false;
@@ -352,8 +351,8 @@ bool opt_slider(const char *key, UiTextId label, float lo, float hi, UiTextId de
                 const char *note, const char *fallback) {
     const char *set = cfg_get(key);
     const char *src = fallback && !(set && *set) ? fallback : key;   // unset: show the value in effect, the fallback's
-    const CfgMeta *m = cfg_meta(src);
-    double v = cfg_double(src), def = m ? strtod(m->def, NULL) : lo;
+    const char *dv = cfg_default(src);
+    double v = cfg_double(src), def = dv ? strtod(dv, NULL) : lo;
     char shown[48];
     snprintf(shown, sizeof shown, fmt, v);
     RowView rv = {shown, fabs(v - def) < step * 0.01, true, note};

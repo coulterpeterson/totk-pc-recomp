@@ -2,11 +2,12 @@
 # through MacNativeGames games/totk/runtime/game_version.h (MIT, Copyright (c) 2026 MacNativeGames contributors) at
 # upstream b75be8c, whose 1.2.1 column maps 1.0.0 addresses, and instruction-window matching around them; every
 # original word was checked against this build's main. 1.0.0 shares sdk and subsdk0 with 1.2.1. Left out, as their
-# words differ in 1.0.0: hair and cloth, bounce, aspect and shadow. cfg.c's defaults and device profiles, not the set
+# words differ in 1.0.0: bounce, aspect and shadow. The hair and cloth sites were located by what the code does (below). cfg.c's defaults and device profiles, not the set
 # lines below, decide fps60 and realtime.
 
 set fps60    TOTK_FPS60          0
 set realtime TOTK_REALTIME       0
+set cloth    TOTK_CLOTH_REALTIME 1
 set output   TOTK_PATCH_OUTPUT   0
 set scene    TOTK_PATCH_SCENE    0
 
@@ -33,6 +34,23 @@ site realtime main 8f68d0 1e210800 d503201f   # fmul s0, s0, s1 -> nop
 # FLT_EPSILON here and, while above, steps it through the shared timer step (main+0x7e9c18, called with x22 at
 # main+0x6ab050), the same shape as 1.2.1's main+0x852d24.
 site realtime main 6a9834 1e270101 1e2703e1   # fmov s1, w8 (FLT_EPSILON) -> fmov s1, wzr
+
+# Hair and cloth (patches-v121.txt has the reasoning): the actor animation update builds a second clock {seconds =
+# factor / 30, ratio = factor} per rendered frame, factor = time object +0xb0 * +0x108 (main+0x7b5934), 1 / 30 the
+# literal at main+0x37761a4. Located in 1.0.0 by that shape: two inlined clocks in one function (main+0x7b5988,
+# main+0x7b6b28: fmul s0, s8, s0 then stp s0, s8 into the clock at x29 - 0x40), one in another (main+0x7f5ec4, the clock
+# at sp + 0x110), and the call of the shared update (main+0x82c224, which stores s2 and s3 as the clock) at
+# main+0x7b6358. The update's other caller (main+0x23d54a4) passes the time it was given and stays. At the fmul,
+# seconds = measured seconds * factor; at the store of the factor into the ratio slot, measured ratio * factor; at
+# the call, s2 and s3 times the measured ratio. x9 and q31 are saved around their use; x8 and s4 are free at the call
+# (the update writes x8 first and never reads s4). Lifted code only: native execution patches single words.
+site cloth main 7b5988 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9   # fmul s0, s8, s0
+site cloth main 7b598c 2d3823a0 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f091f 2d387fa0 3dc007ff f94003e9 910083ff   # stp s0, s8, [x29, #-0x40]
+site cloth main 7b6b28 1e200900 f81f0fe9 @page:x9 bd400520 1e200900 f84107e9   # fmul s0, s8, s0
+site cloth main 7b6b2c 2d3823a0 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f091f 2d387fa0 3dc007ff f94003e9 910083ff   # stp s0, s8, [x29, #-0x40]
+site cloth main 7f5ec4 1e210801 f81f0fe9 @page:x9 bd400521 1e210801 f84107e9   # fmul s1, s0, s1
+site cloth main 7f5ed0 bd0117e0 d10083ff f90003e9 3d8007ff @page:x9 bd40013f 1e3f081f bd0137ff 3dc007ff f94003e9 910083ff   # str s0, [sp, #0x114]
+site cloth main 7b6358 9401d7b3 @page:x8 bd400104 1e240842 1e240863 9401d7b3   # bl 0x82c224
 site output main e996ac d280f008 @page:x8   # mov x8, #0x780 -> adrp x8, page
 site output main e996b0 f2c08708 f9401908   # movk x8, #0x438, lsl #32 -> ldr x8, [x8, #48]
 site output main c630a4 aa1403e0 @page:x21  # mov x0, x20 -> adrp x21, page
