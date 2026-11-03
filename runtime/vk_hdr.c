@@ -234,9 +234,16 @@ void vk_hdr_image_gone(VkImage image) {   // a texture image went away: forget i
 
 // ---- swapchain
 
+static int offered = -1;   // the last surface's formats include an HDR10 one; -1 before the first swapchain
+
+int vk_hdr_offered(void) { return __atomic_load_n(&offered, __ATOMIC_RELAXED); }
+
 // With TOTK_HDR=1, the HDR10 format among the surface's (10-bit UNORM, ST 2084): 1 with *out set, else 0 and the
-// reason logged once.
+// reason logged once. Notes for vk_hdr_offered whether the surface has HDR10 at all.
 int vk_hdr_surface_format(const VkSurfaceFormatKHR *f, uint32_t n, VkSurfaceFormatKHR *out) {
+    int any = 0;
+    for (uint32_t i = 0; i < n; i++) any |= f[i].colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT;
+    __atomic_store_n(&offered, any, __ATOMIC_RELAXED);
     if (!vk_hdr_wanted()) return 0;
     static int logged;
     if (!logged) {

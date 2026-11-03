@@ -130,6 +130,7 @@ void vk_hdr_off(void);   // probes that read back 8-bit swapchain pixels: SDR wh
 int vk_hdr_surface_format(const VkSurfaceFormatKHR *f, uint32_t n, VkSurfaceFormatKHR *out);
 void vk_hdr_metadata(VkSwapchainKHR sc, int new_sc);
 void vk_hdr_set_active(int on);
+int vk_hdr_offered(void);   // the surface offers HDR10 (vk_hdr_surface_format saw it): 1, 0, -1 not asked yet
 int vk_hdr_active(void);
 VkImage vk_hdr_encode(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, const int crop[4]);
 VkImageView vk_hdr_ui_target(VkCommandBuffer cb, uint32_t w, uint32_t h);

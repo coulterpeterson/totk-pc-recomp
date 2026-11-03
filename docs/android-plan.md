@@ -176,6 +176,13 @@ Done, and how it was checked:
   1280x720 rather than the docked 1920x1080 it used to show (the game draws its handheld picture in the top left of
   its 1920x1080 canvas; `runtime/resolution.c` takes the mode's own sizes). On Android the menu leaves out the window
   size, as the window is the screen.
+- 60 fps cap (2026-11-03, at the player's request): the Android profile caps at 60 instead of 40, so a faster SoC is
+  not held back; the Thor keeps its own pace (about 40 in performance mode) with the real-time step. The menu offers
+  30, 60 or uncapped (the screen's refresh rate under vsync), and leaves out the rows that cannot apply on Android
+  (graphics card, DLAA/DLSS/FXAA, HDR on a screen without HDR10, the log folder) and greys out those whose patch set
+  the game version lacks (shadow map size, shadow range, field of view, the high-fps fix). At the 60 cap the lifted build
+  played the save at 48.3 fps over the last 100 s of a four-minute run (every window 47.9-49.1, speed 1.000; GPU after
+  the last part 13.6 ms, walk 6.0 ms), against 40-41 uncapped earlier the same day while the device ran at 88-91 C.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game

@@ -52,6 +52,10 @@ void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void vk_queue_lock(void);
 void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
+int res_is_16x9(unsigned w, unsigned h);
+int res_own_share_pct(void);
+int rt_patch_set(const char *name);
+int vk_hdr_offered(void);
 double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_port_version[];
@@ -489,21 +493,26 @@ static void row_window_size(void) {
 // The game resolution (resolution.c): 16:9 sizes from its smallest, 1280x720 (for weak GPUs), up, the common 21:9 and
 // 32:9 monitor sizes and the 16:10 screens of the Steam Deck, handhelds and laptops (the camera and the HUD follow
 // another shape, resolution.c res_init; the installer lays the HUD out for each, installer/steps.py ASPECT_SIZES), and
-// the current value when it is another size.
+// the current value when it is another size. A game version without the camera aspect patch lists 16:9 sizes only.
 static void row_output_res(void) {
     static const char *const vals[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3200x1800", "3840x2160",
                                        "2560x1080", "3440x1440", "3840x1600", "5120x2160", "3840x1080", "5120x1440",
                                        "1280x800", "1680x1050", "1920x1200", "2560x1600"};
     enum { N = sizeof vals / sizeof *vals };
     char shown[N][32];
-    const char *names[N];
+    const char *listed[N], *names[N], *now = cfg_value("TOTK_OUTPUT_RES");
+    bool aspect = rt_patch_set("aspect") >= 0;   // without the camera aspect patch another shape is stretched
+    int n = 0;
     for (int i = 0; i < N; i++) {
-        int w = 0, h = 0;
-        sscanf(vals[i], "%dx%d", &w, &h);
-        snprintf(shown[i], sizeof shown[i], "%d × %d", w, h);   // U+00D7, the multiplication sign
-        names[i] = shown[i];
+        unsigned w = 0, h = 0;
+        sscanf(vals[i], "%ux%u", &w, &h);
+        if (!aspect && !res_is_16x9(w, h) && strcmp(vals[i], now)) continue;
+        snprintf(shown[n], sizeof shown[n], "%u × %u", w, h);   // U+00D7, the multiplication sign
+        listed[n] = vals[i];
+        names[n] = shown[n];
+        n++;
     }
-    opt_choice_list("TOTK_OUTPUT_RES", UI_MENU_OUTPUT_RES, vals, names, N, UI_MENU_OUTPUT_RES_DESC);
+    opt_choice_list("TOTK_OUTPUT_RES", UI_MENU_OUTPUT_RES, listed, names, n, UI_MENU_OUTPUT_RES_DESC);
 }
 
 static void row_render_scale(void) {
@@ -511,12 +520,19 @@ static void row_render_scale(void) {
     enum { N = sizeof vals / sizeof *vals };
     char shown[N][32];
     const char *names[N];
-    names[0] = menu_text(UI_MENU_RENDER_SCALE_GAME);
+    static char own[48];   // the game's own share: 5/6 docked, the whole output in handheld mode
+    snprintf(own, sizeof own, menu_text(UI_MENU_RENDER_SCALE_GAME), res_own_share_pct());
+    names[0] = own;
     for (int i = 1; i < N; i++) {
         snprintf(shown[i], sizeof shown[i], "%s %%", vals[i]);
         names[i] = shown[i];
     }
     opt_choice_list("TOTK_RENDER_SCALE", UI_MENU_RENDER_SCALE, vals, names, N, UI_MENU_RENDER_SCALE_DESC);
+}
+
+// A row whose setting works through a patch set this game version lacks (recomp/patches-<version>.txt): greyed out.
+static void needs_set(const char *set) {
+    if (rt_patch_set(set) < 0) opt_disable_next(UI_MENU_NOT_IN_VERSION);
 }
 
 static void row_shadow_res(void) {
@@ -525,6 +541,7 @@ static void row_shadow_res(void) {
     const char *names[N];
     names[0] = menu_text(UI_MENU_SHADOW_RES_GAME);
     for (int i = 1; i < N; i++) names[i] = vals[i];
+    needs_set("shadow");
     opt_choice_list("TOTK_SHADOW_RES", UI_MENU_SHADOW_RES, vals, names, N, UI_MENU_SHADOW_RES_DESC);
 }
 
@@ -537,9 +554,11 @@ static void row_shadow_scale(void) {
 static void row_shadow_range(void) {
     static const char *const vals[] = {"100", "150", "200", "300"};
     static const char *const names[] = {"160 m (1x)", "240 m (1.5x)", "320 m (2x)", "480 m (3x)"};
+    needs_set("cascade");
     opt_choice_list("TOTK_SHADOW_RANGE", UI_MENU_SHADOW_RANGE, vals, names, 4, UI_MENU_SHADOW_RANGE_DESC);
 }
 
+#ifndef __ANDROID__   // Android: one GPU
 static void row_gpu(void) {
     const char *vals[MAX_GPUS + 1], *names[MAX_GPUS + 1];
     char idx[MAX_GPUS][4];
@@ -552,6 +571,7 @@ static void row_gpu(void) {
     }
     opt_choice_list("TOTK_GPU_INDEX", UI_MENU_GPU, vals, names, g_gpu_n + 1, UI_MENU_GPU_DESC);
 }
+#endif
 
 // The game language: one entry per language TotK ships (a Switch code that names it), each under its own name. The
 // Switch's Portuguese is not among them.
@@ -578,6 +598,14 @@ static void row_game_lang(void) {
 
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
 static void row_fps_limit() {
+#ifdef __ANDROID__
+    // a handheld: 30, 60 or uncapped, which under vsync is the screen's refresh rate (display)
+    static const char *const vals[] = {"30", "60", "display"};
+    static const UiTextId ids[] = {UI_MENU_FPS_30, UI_MENU_FPS_60, UI_MENU_FPS_UNCAPPED};
+    enum { N = sizeof vals / sizeof *vals };
+    const char *names[N];
+    for (int i = 0; i < N; i++) names[i] = menu_text(ids[i]);
+#else
     // 40 and 45: the Steam Deck's screen runs at 40 to 60 Hz (the OLED to 90); 40 divides 40 and 120 Hz evenly
     static const char *const vals[] = {"30", "40", "45", "60", "90", "120", "144", "display"};
     static const UiTextId ids[] = {UI_MENU_FPS_30, UI_MENU_FPS_40,  UI_MENU_FPS_45,  UI_MENU_FPS_60,
@@ -591,6 +619,7 @@ static void row_fps_limit() {
         snprintf(display, sizeof display, menu_text(UI_MENU_FPS_DISPLAY_HZ), hz);
         names[N - 1] = display;
     }
+#endif
     const char *set = cfg_get("TOTK_FPS_LIMIT"), *old = cfg_get("TOTK_FPS60");
     int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
     opt_choice_list("TOTK_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, N, UI_MENU_FPS_LIMIT_DESC, cur);
@@ -654,7 +683,9 @@ static void tab_screen(float scale) {
 #endif
     static const UiTextId present[] = {UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE};
     opt_choice("TOTK_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
+#ifndef __ANDROID__
     row_gpu();
+#endif
     static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
     opt_choice("TOTK_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_GRAPHICS);
@@ -666,6 +697,7 @@ static void tab_screen(float scale) {
     opt_slider("TOTK_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     static const UiTextId aspect[] = {UI_MENU_ASPECT_FIT, UI_MENU_ASPECT_STRETCH};
     opt_choice("TOTK_ASPECT", UI_MENU_ASPECT, aspect, 2, UI_MENU_ASPECT_DESC);
+    needs_set("fov");
     opt_slider("TOTK_FOV", UI_MENU_FOV, 70, 140, UI_MENU_FOV_DESC, 5, "%.0f %%");
     static const char *const aniso[] = {"game", "2", "4", "8", "16"};
     const char *aniso_names[] = {menu_text(UI_MENU_ANISO_GAME), "2x", "4x", "8x", "16x"};
@@ -674,12 +706,20 @@ static void tab_screen(float scale) {
     row_shadow_range();
     opt_slider("TOTK_PCSS", UI_MENU_PCSS, 0, 200, UI_MENU_PCSS_DESC, 10, "%.0f %%");
     opt_slider("TOTK_CONTACT_SHADOWS", UI_MENU_CONTACT_SHADOWS, 0, 100, UI_MENU_CONTACT_SHADOWS_DESC, 10, "%.0f %%");
+#ifndef __ANDROID__   // DLAA, the DLSS modes and the FXAA switch need NVIDIA's NGX, a Windows DLL (vk_dlaa.c)
     opt_toggle("TOTK_DLAA", UI_MENU_DLAA, UI_MENU_DLAA_DESC);
     static const UiTextId dlss[] = {UI_MENU_DLSS_DLAA, UI_MENU_DLSS_QUALITY, UI_MENU_DLSS_BALANCED,
                                     UI_MENU_DLSS_PERFORMANCE};
     opt_choice("TOTK_DLSS", UI_MENU_DLSS, dlss, 4, UI_MENU_DLSS_DESC);
     opt_toggle("TOTK_FXAA", UI_MENU_FXAA, UI_MENU_FXAA_DESC);
+#endif
     rows_color();
+#ifdef __ANDROID__   // a handheld's screen is fixed: no HDR rows when it offers no HDR10 (vk_hdr_offered)
+    if (!vk_hdr_offered() && !cfg_bool("TOTK_HDR")) {
+        opt_end();
+        return;
+    }
+#endif
     opt_group(UI_MENU_HDR_GROUP);
     opt_toggle("TOTK_HDR", UI_MENU_HDR, UI_MENU_HDR_DESC);
     opt_slider("TOTK_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 10000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f");
@@ -909,7 +949,10 @@ static const char *action_value(const ActionNote &a, UiTextId done_text) {
 static void action_done(ActionNote &a, bool ok) { a = {plat_now_ns() + 3000000000ull, ok ? 1 : -1}; }
 
 static void tab_advanced(float scale) {
-    static ActionNote copy_note, log_note;
+    static ActionNote copy_note;
+#ifndef __ANDROID__
+    static ActionNote log_note;
+#endif
     opt_begin("##advanced", scale);
     opt_text(UI_MENU_ADV_WARNING, true);
 
@@ -970,11 +1013,13 @@ static void tab_advanced(float scale) {
         snprintf(rec_path, sizeof rec_path, "%s/input-record.txt", sysinfo_log_folder(dir, sizeof dir) ? dir : ".");
     }
     row_set_or_not("TOTK_INPUT_RECORD", UI_MENU_INPUT_RECORD, UI_MENU_INPUT_RECORD_DESC, rec_path);
+#ifndef __ANDROID__   // no file manager to hand the folder to (plat_open_folder runs xdg-open)
     if (opt_button("##open_log", UI_MENU_OPEN_LOG, UI_MENU_OPEN_LOG_DESC, action_value(log_note, UI_MENU_OPEN_LOG))) {
         char dir[512];
         bool ok = sysinfo_log_folder(dir, sizeof dir) && plat_open_folder(dir);
         if (!ok) action_done(log_note, false);   // success shows as the opened folder
     }
+#endif
     if (opt_button("##copy_info", UI_MENU_COPY_INFO, UI_MENU_COPY_INFO_DESC,
                    action_value(copy_note, UI_MENU_COPY_INFO_DONE))) {
         static char text[16384];
@@ -1041,6 +1086,7 @@ static void mods_builtin_rows(void) {
     if (opt_button("##mods_res", UI_MENU_MODS_RES, UI_MENU_MODS_RES_DESC, res)) go_to(TAB_SCREEN, "TOTK_OUTPUT_RES");
     opt_toggle("TOTK_REALTIME", UI_MENU_REALTIME, UI_MENU_REALTIME_DESC);
     opt_toggle("TOTK_CLOTH_REALTIME", UI_MENU_CLOTH_REALTIME, UI_MENU_CLOTH_REALTIME_DESC);
+    needs_set("bounce");
     opt_toggle("TOTK_HIGHFPS_FIX", UI_MENU_HIGHFPS_FIX, UI_MENU_HIGHFPS_FIX_DESC);
     opt_button("##mods_quickmenu", UI_MENU_MODS_QUICKMENU, UI_MENU_MODS_QUICKMENU_DESC,
                menu_text(romfs_patches_loaded() ? UI_MENU_ON : UI_MENU_OFF));
@@ -1102,6 +1148,11 @@ static void tab_mods(float scale) {
     }
     bool rebuild =
         cheats_rebuild_pending() && opt_button("##restart", UI_MENU_CHEATS_REBUILD, UI_MENU_CHEATS_REBUILD_DESC);
+#ifdef __ANDROID__   // no file manager to hand it to: the button makes the folder and shows where it is
+    const char *md = mods_dir(), *shown = strstr(md, "files/");   // the app's data folder: files/mods
+    if (opt_button("##mods_open", UI_MENU_MODS_OPEN, UI_MENU_MODS_OPEN_DESC, shown ? shown : md) && md[0])
+        plat_file_mkdir_p(md);
+#else
     static uint64_t open_failed;   // plat_now_ns until which the button says it failed
     if (opt_button("##mods_open", UI_MENU_MODS_OPEN, UI_MENU_MODS_OPEN_DESC,
                    plat_now_ns() < open_failed ? menu_text(UI_MENU_ACTION_FAILED) : "")) {
@@ -1109,6 +1160,7 @@ static void tab_mods(float scale) {
         if (ok) plat_file_mkdir_p(mods_dir());
         if (!ok || !plat_open_folder(mods_dir())) open_failed = plat_now_ns() + 3000000000ull;
     }
+#endif
     mods_builtin_rows();
     opt_end();
     if (rebuild) {

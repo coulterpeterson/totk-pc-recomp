@@ -249,8 +249,9 @@ The APK's launcher icon is the game's own: `tools/extract.py` takes it from the 
 `<work>/extracted/v0/control/`, and `tools/build_apk.py` packs it (without it the APK has Android's default icon).
 
 Start "TotK Recomp" on the device. The log goes to logcat (`adb logcat -s totk`), settings to `totk.ini` in the data
-folder. The Android device profile (`runtime/cfg.c`) runs the game in handheld mode (1280x720) at up to 40 fps with the
-real-time step; the settings menu marks its values "default". On the controller,
+folder. The Android device profile (`runtime/cfg.c`) runs the game in handheld mode (1280x720) at up to 60 fps with the
+real-time step (the AYN Thor plays at about 40 in performance mode); the settings menu marks its values "default" and
+offers 30, 60 or uncapped. On the controller,
 Minus and Plus together (Select and Start on most Android pads) open the settings menu, and L3 and R3 together cycle
 the performance overlay: off, frame rate, full panel ([controls.md](controls.md)). A probe or another command line
 goes through the launch intent; quote it for the device's shell:

@@ -364,6 +364,11 @@ void res_wanted(unsigned out[2]) {
     out[0] = R.ow, out[1] = R.oh;
 }
 
+int res_own_share_pct(void) {
+    decide();
+    return (int)(R.own[2] * 100.0 / R.own[0] + 0.5);
+}
+
 void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
     out[0] = R.on ? R.ow : R.own[0], out[1] = R.on ? R.oh : R.own[1];

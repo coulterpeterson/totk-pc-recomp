@@ -37,7 +37,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_FAILED] = "could not save settings",
     [UI_MENU_VERSION] = "TotK Recomp %s, game %s",
 
-    [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
+    [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 on a keyboard toggles it.",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Custom",
     [UI_MENU_PRESENT] = "Presentation", [UI_MENU_PRESENT_DESC] = "How finished frames reach the screen.",
@@ -60,7 +60,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_RENDER_SCALE] = "3D render scale",
     [UI_MENU_RENDER_SCALE_DESC] = "Size of the 3D scene relative to the game resolution; the game's FSR scales it to "
                                   "that size. Above 100 % smooths jagged edges (supersampling) at a high GPU cost.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Game (83 %)",
+    [UI_MENU_RENDER_SCALE_GAME] = "Game (%d %%)",   // the game's own share of the output
     [UI_MENU_UPSCALER] = "Scaling to the window",
     [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
                               "edges and detail sharper than bilinear.",
@@ -141,6 +141,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     // the monitor's refresh rate; printf format with the rate in Hz when it is known
     [UI_MENU_FPS_DISPLAY] = "Monitor rate", [UI_MENU_FPS_DISPLAY_HZ] = "Monitor rate (%.0f Hz)",
+    [UI_MENU_FPS_UNCAPPED] = "Uncapped",   // Android: as fast as the screen refreshes
     [UI_MENU_REALTIME] = "Game speed follows the clock",
     [UI_MENU_REALTIME_DESC] = "Steps the game by real time, so a slow frame does not slow the game down.",
     [UI_MENU_CLOTH_REALTIME] = "Cloth on the clock",
@@ -153,10 +154,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OPERATION_MODE_DESC] = "Whether the game thinks it runs docked or handheld.",
     [UI_MENU_MODE_DOCKED] = "Docked", [UI_MENU_MODE_HANDHELD] = "Handheld",
     [UI_MENU_ASSUME_FOCUS] = "Keep running out of focus",
-    [UI_MENU_ASSUME_FOCUS_DESC] = "On (the default), the game keeps running while you are in another window, and the "
-                                  "keyboard stays quiet until the window is in front again. Off, it pauses when its "
-                                  "window loses focus, as on the Switch when Home is pressed; a load interrupted that "
-                                  "way can stop for good.",
+    [UI_MENU_ASSUME_FOCUS_DESC] = "On, the game keeps running while you are in another window or app, and the keyboard "
+                                  "stays quiet until the game is in front again. Off, it pauses when it loses focus, as "
+                                  "on the Switch when Home is pressed; a load interrupted that way can stop for good.",
 
     [UI_MENU_MODS_BUILTIN] = "Built into the port", [UI_MENU_MODS_INSTALLED] = "Installed mods",
     [UI_MENU_MODS_NONE] = "No mods yet. Unpack a mod into the mods folder, one folder per mod with its romfs folder "
@@ -377,6 +377,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION] = "Validation layer",
     [UI_MENU_VK_VALIDATION_DESC] = "Checks every Vulkan call and slows the game down a lot.",
     [UI_MENU_VK_VALIDATION_MISSING] = "The validation layer is not installed.",
+    [UI_MENU_NOT_IN_VERSION] = "This game version has no patch for it.",
     [UI_MENU_VK_DYN_VERTEX] = "Dynamic vertex state",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "Forces dynamic vertex input on or off; the default depends on the GPU.",
     [UI_MENU_VK_DYN_A2C] = "Dynamic alpha to coverage",
@@ -460,7 +461,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_FAILED] = "не удалось сохранить настройки",
     [UI_MENU_VERSION] = "TotK Recomp %s, игра %s",
 
-    [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
+    [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 на клавиатуре переключает режим.",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Другой",
     [UI_MENU_PRESENT] = "Вывод кадров", [UI_MENU_PRESENT_DESC] = "Как готовые кадры попадают на экран.",
@@ -484,7 +485,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_RENDER_SCALE] = "Масштаб 3D-отрисовки",
     [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до этого размера. "
                                   "Выше 100 % сглаживает лесенки на краях (суперсэмплинг) ценой большой нагрузки на GPU.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (83 %)",
+    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (%d %%)",
     [UI_MENU_UPSCALER] = "Масштабирование под окно",
     [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
                               "детали чётче билинейного.",
@@ -565,6 +566,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "Как у монитора", [UI_MENU_FPS_DISPLAY_HZ] = "Как у монитора (%.0f Гц)",
+    [UI_MENU_FPS_UNCAPPED] = "Без ограничения",
     [UI_MENU_REALTIME] = "Скорость игры по часам",
     [UI_MENU_REALTIME_DESC] = "Игра идёт по реальному времени, медленный кадр её не замедляет.",
     [UI_MENU_CLOTH_REALTIME] = "Ткань по часам",
@@ -577,10 +579,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OPERATION_MODE_DESC] = "Игра считает, что консоль в док-станции или в портативном режиме.",
     [UI_MENU_MODE_DOCKED] = "В док-станции", [UI_MENU_MODE_HANDHELD] = "Портативный",
     [UI_MENU_ASSUME_FOCUS] = "Работать без фокуса",
-    [UI_MENU_ASSUME_FOCUS_DESC] = "Включено (по умолчанию): игра идёт, пока вы в другом окне, а клавиатура не "
-                                  "действует, пока окно не вернётся на передний план. Выключено: игра встаёт на паузу, "
-                                  "когда окно теряет фокус, как на Switch при нажатии Home; прерванная так загрузка "
-                                  "может остановиться насовсем.",
+    [UI_MENU_ASSUME_FOCUS_DESC] = "Включено: игра идёт, пока вы в другом окне или приложении, а клавиатура не "
+                                  "действует, пока игра не вернётся на передний план. Выключено: игра встаёт на паузу, "
+                                  "когда теряет фокус, как на Switch при нажатии Home; прерванная так загрузка может "
+                                  "остановиться насовсем.",
 
     [UI_MENU_MODS_BUILTIN] = "Встроенные в порт", [UI_MENU_MODS_INSTALLED] = "Установленные моды",
     [UI_MENU_MODS_NONE] = "Модов пока нет. Распакуйте мод в папку mods, каждый мод в свою папку с папкой romfs внутри, и "
@@ -803,6 +805,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION] = "Слой проверки",
     [UI_MENU_VK_VALIDATION_DESC] = "Проверяет каждый вызов Vulkan и сильно замедляет игру.",
     [UI_MENU_VK_VALIDATION_MISSING] = "Слой проверки не установлен.",
+    [UI_MENU_NOT_IN_VERSION] = "Для этой версии игры нет патча.",
     [UI_MENU_VK_DYN_VERTEX] = "Динамическое состояние вершин",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "Принудительно включает или выключает динамический ввод вершин; по умолчанию зависит от GPU.",
     [UI_MENU_VK_DYN_A2C] = "Динамический alpha to coverage",
@@ -918,7 +921,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_FAILED] = "não foi possível salvar as configurações",
     [UI_MENU_VERSION] = "TotK Recomp %s, jogo %s",
 
-    [UI_MENU_FULLSCREEN] = "Tela cheia", [UI_MENU_FULLSCREEN_DESC] = "O jogo ocupa a tela inteira; F11 alterna.",
+    [UI_MENU_FULLSCREEN] = "Tela cheia", [UI_MENU_FULLSCREEN_DESC] = "O jogo ocupa a tela inteira; F11 no teclado alterna.",
     [UI_MENU_WINDOW_SIZE] = "Tamanho da janela",
     [UI_MENU_WINDOW_SIZE_DESC] = "Tamanho da janela do jogo fora da tela cheia.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Personalizado",
@@ -943,7 +946,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_RENDER_SCALE_DESC] = "Tamanho da cena 3D em relação à resolução do jogo; o FSR do jogo a amplia até esse "
                                   "tamanho. Acima de 100 % suaviza bordas serrilhadas (supersampling) com alto custo de "
                                   "GPU.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Jogo (83 %)",
+    [UI_MENU_RENDER_SCALE_GAME] = "Jogo (%d %%)",
     [UI_MENU_UPSCALER] = "Escala para a janela",
     [UI_MENU_UPSCALER_DESC] = "Como a imagem é ampliada quando a janela é maior que a resolução do jogo. O FSR mantém "
                               "bordas e detalhes mais nítidos que o bilinear.",
@@ -961,11 +964,12 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_ASSUME_FOCUS] = "Continuar rodando fora de foco",
-    [UI_MENU_ASSUME_FOCUS_DESC] = "Ligado (o padrão), o jogo continua rodando enquanto você está em outra janela, e o "
-                                  "teclado fica sem efeito até a janela voltar para a frente. Desligado, ele pausa quando "
-                                  "a janela perde o foco, como no Switch ao apertar Home; um carregamento interrompido "
-                                  "assim pode parar de vez.",
+    [UI_MENU_ASSUME_FOCUS_DESC] = "Ligado, o jogo continua rodando enquanto você está em outra janela ou app, e o "
+                                  "teclado fica sem efeito até o jogo voltar para a frente. Desligado, ele pausa quando "
+                                  "perde o foco, como no Switch ao apertar Home; um carregamento interrompido assim pode "
+                                  "parar de vez.",
     [UI_MENU_FPS_DISPLAY] = "Taxa do monitor", [UI_MENU_FPS_DISPLAY_HZ] = "Taxa do monitor (%.0f Hz)",
+    [UI_MENU_FPS_UNCAPPED] = "Sem limite",
     [UI_MENU_REALTIME] = "Velocidade do jogo pelo relógio",
     [UI_MENU_REALTIME_DESC] = "Avança o jogo pelo tempo real, para que um quadro lento não deixe o jogo mais lento.",
     [UI_MENU_CLOTH_REALTIME] = "Tecidos pelo relógio",
@@ -1151,6 +1155,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION] = "Camada de validação",
     [UI_MENU_VK_VALIDATION_DESC] = "Verifica cada chamada Vulkan e deixa o jogo muito mais lento.",
     [UI_MENU_VK_VALIDATION_MISSING] = "A camada de validação não está instalada.",
+    [UI_MENU_NOT_IN_VERSION] = "Esta versão do jogo não tem o patch.",
     [UI_MENU_VK_DYN_VERTEX] = "Estado dinâmico de vértices",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "Força a entrada dinâmica de vértices ligada ou desligada; o padrão depende da GPU.",
     [UI_MENU_VK_DYN_A2C] = "Alpha to coverage dinâmico",
@@ -1379,7 +1384,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_FAILED] = "无法保存设置",
     [UI_MENU_VERSION] = "TotK Recomp %s，游戏 %s",
     [UI_MENU_FULLSCREEN] = "全屏",
-    [UI_MENU_FULLSCREEN_DESC] = "游戏铺满屏幕；按 F11 切换。",
+    [UI_MENU_FULLSCREEN_DESC] = "游戏铺满屏幕；键盘上按 F11 切换。",
     [UI_MENU_WINDOW_SIZE] = "窗口大小",
     [UI_MENU_WINDOW_SIZE_DESC] = "非全屏时游戏窗口的大小。",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "自定义",
@@ -1412,7 +1417,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_RENDER_SCALE_DESC] = "3D 场景相对于游戏分辨率的尺寸；"
                                   "游戏的 FSR 会将其缩放到该尺寸。"
                                   "高于 100% 会平滑锯齿边缘（超采样），但 GPU 开销很高。",
-    [UI_MENU_RENDER_SCALE_GAME] = "游戏（83%）",
+    [UI_MENU_RENDER_SCALE_GAME] = "游戏（%d%%）",
     [UI_MENU_UPSCALER] = "放大到窗口",
     [UI_MENU_UPSCALER_DESC] = "窗口大于游戏分辨率时画面的放大方式。"
                               "FSR 比双线性更能保留边缘和细节。",
@@ -1455,6 +1460,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_120] = "120 FPS",
     [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "显示器刷新率",
+    [UI_MENU_FPS_UNCAPPED] = "不限",
     [UI_MENU_FPS_DISPLAY_HZ] = "显示器刷新率（%.0f Hz）",
     [UI_MENU_REALTIME] = "游戏速度跟随时钟",
     [UI_MENU_REALTIME_DESC] = "按真实时间推进游戏，帧率低时游戏速度也不会变慢。",
@@ -1471,9 +1477,9 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_MODE_DOCKED] = "底座模式",
     [UI_MENU_MODE_HANDHELD] = "掌机模式",
     [UI_MENU_ASSUME_FOCUS] = "后台保持运行",
-    [UI_MENU_ASSUME_FOCUS_DESC] = "开启（默认）时，切到其他窗口游戏仍会继续运行，"
-                                  "但键盘要等窗口回到前台才会响应。关闭时，"
-                                  "窗口失去焦点即暂停，如同在 Switch 上按 Home 键；"
+    [UI_MENU_ASSUME_FOCUS_DESC] = "开启时，切到其他窗口或应用游戏仍会继续运行，"
+                                  "但键盘要等游戏回到前台才会响应。关闭时，"
+                                  "游戏失去焦点即暂停，如同在 Switch 上按 Home 键；"
                                   "这样被打断的读取可能会永久卡住。",
     [UI_MENU_VOLUME] = "音量",
     [UI_MENU_VOLUME_DESC] = "游戏的主音量。",
@@ -1730,6 +1736,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION] = "验证层",
     [UI_MENU_VK_VALIDATION_DESC] = "检查每一次 Vulkan 调用，会大幅拖慢游戏。",
     [UI_MENU_VK_VALIDATION_MISSING] = "未安装验证层。",
+    [UI_MENU_NOT_IN_VERSION] = "此游戏版本没有对应补丁。",
     [UI_MENU_VK_DYN_VERTEX] = "动态顶点状态",
     [UI_MENU_VK_DYN_VERTEX_DESC] = "强制开关动态顶点输入；默认值取决于显卡。",
     [UI_MENU_VK_DYN_A2C] = "动态 Alpha 覆盖",
