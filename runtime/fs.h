@@ -57,3 +57,13 @@ int fs_save_busy(void);                                    // a save is being wr
                                                            // or save data changed in the last 3 s and not committed
 void fs_save_flush(void);                                  // wait for a save Commit still running in the background;
                                                            // every exit path calls it before the process ends
+// The menu's Game tab, Save game (fs_host.c "save import, export and snapshots"). A save chosen to load waits as pending and
+// replaces the committed save at the next start; the one it replaces is kept as a snapshot.
+int fs_save_import_find(char *src, size_t cap);           // 1: save-import beside the profile holds a save (src)
+int fs_save_import_stage(void);                           // that save loads at the next start; 0 on success
+int fs_save_pending(void);                                 // 1: a save waits for the next start
+void fs_save_pending_cancel(void);                         // it does not load after all
+int fs_save_export(char *out, size_t cap);                 // the newest save to save-export/<UTC time>/ beside the
+                                                           // profile; 0 on success, out that folder relative to it
+int fs_save_snapshots(char (*names)[48], int max);         // the snapshots' names, newest first
+int fs_save_snapshot_stage(const char *name);              // that snapshot loads at the next start; 0 on success

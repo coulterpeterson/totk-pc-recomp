@@ -11,6 +11,9 @@
 //   <profile>/save-backup/<time>/      the three committed saves before the current one
 //   <profile>/temp/                    emptied at start
 //   <profile>/cache/<index>/           cache storage
+//   <profile>/save-snapshots/<time>/   committed saves kept every TOTK_SAVE_SNAPSHOT_MINUTES (section "save import,
+//                                      export and snapshots"), and <profile>/save-import-pending/, a save to load at
+//                                      the next start
 //
 // The save mount is journaled as on Horizon: changes go to a working copy and become the committed save atomically at
 // Commit; a crash or an Unmount before Commit leaves the previous committed save. Commit returns at once and the copy
@@ -20,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "fs.h"
 #include "host.h"
 #include "platform/platform.h"
@@ -319,6 +323,10 @@ static int same_tree(const char *a, const char *b) {
 }
 
 static int name_cmp(const void *a, const void *b) { return strcmp(a, b); }
+static int name_cmp_listed(const void *a, const void *b) {
+    return strcmp(((const Listed *)a)->name, ((const Listed *)b)->name);
+}
+static void snapshot_take(int force, const char *suffix);
 
 // The backups' folder names (digits first), sorted: oldest first, as rotate_backup names them in creation order.
 static int backup_names(char (*names)[48]) {
@@ -507,6 +515,7 @@ static uint32_t save_commit_locked(void) {
     if (tx_dead) return FS_R_INVALID_ARGUMENT;
     rt_log("fs commit save: %d files, %d changed (%.1f MiB written), %d unchanged linked, in %.0f ms%s", nfiles,
            nfiles - linked, bytes / 1048576.0, linked, (plat_now_ns() - t0) / 1e6, waits ? "; waits in save-tx" : "");
+    if (!waits) snapshot_take(0, NULL);
     return 0;
 }
 
@@ -558,6 +567,272 @@ static uint32_t save_commit(void) {
     return commit_run();
 }
 
+// ---- save import, export and snapshots (the menu's Game tab, Save game). A save exported by Eden (its 0100F2C0115B6000
+// folder) or by JKSV / Checkpoint on a Switch holds the game's files as the committed save does (option.sav,
+// slot_00/progress.sav, album/...), so either is copied as it is. The running game keeps its save mounted, so a save
+// to load (an import, a snapshot to go back to) waits in save-import-pending and replaces the committed save at the
+// next start, before anything reads it (import_apply); the save it replaces is kept as a snapshot first.
+//   <home>/save-import/              where the player puts a save to import (any folder depth)
+//   <home>/save-export/<time>/       what Export writes
+// <home> is the folder that holds the profile: the game's folder (totk.exe, Android's data folder) as installed.
+//   <profile>/save-snapshots/<time>/ snapshots, newest TOTK_SAVE_SNAPSHOTS kept; unchanged files are hard links
+//   <profile>/save-import-pending/   the save the next start loads
+#define SAVE_MAGIC 0x01020304u
+#define SAVE_VERSION_100 0x0046C3C8u   // the version field of every .sav 1.0.0 writes
+static char snap_root[1100], pending_root[1100];
+static void ready(void);
+
+// Seconds since 1970 of a UTC date (days_from_civil, H. Hinnant's public-domain algorithm); timegm is not on Windows.
+static int64_t utc_seconds(int y, int mo, int d, int h, int mi, int sec) {
+    y -= mo <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+    int64_t doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1, doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (era * 146097 + doe - 719468) * 86400 + h * 3600 + mi * 60 + sec;
+}
+
+static void home_join(char *out, size_t cap, const char *name) {
+    char home[1024];
+    snprintf(home, sizeof home, "%s", profile);
+    char *cut = plat_last_sep(home);
+    if (cut) *cut = 0;
+    else snprintf(home, sizeof home, ".");
+    snprintf(out, cap, "%s/%s", home, name);
+}
+
+// "YYYYMMDD-HHMMSS" in UTC, as save-backup's names begin.
+static void utc_name(char *out, size_t cap) {
+    struct tm t;
+    plat_gmtime((int64_t)(plat_unix_time_ns() / 1000000000u), &t);
+    snprintf(out, cap, "%04d%02d%02d-%02d%02d%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min,
+             t.tm_sec);
+}
+
+static int count_entries(const char *dir) {
+    Listing l;
+    if (list_dir(dir, &l)) return 0;
+    int n = l.n;
+    listing_free(l.e, l.n);
+    return n;
+}
+
+// A save's root: a folder with option.sav or a slot_NN folder holding progress.sav. Searched breadth-first to depth 4
+// under dir; 1 with the root in out.
+static int has_save_files(const char *dir) {
+    char *o = join(dir, "option.sav");
+    int got = plat_fs_kind(o) == PLAT_FS_FILE;
+    free(o);
+    for (int i = 0; i < 10 && !got; i++) {
+        char rel[32];
+        snprintf(rel, sizeof rel, "slot_%02d/progress.sav", i);
+        char *pth = join(dir, rel);
+        got = plat_fs_kind(pth) == PLAT_FS_FILE;
+        free(pth);
+    }
+    return got;
+}
+
+static int find_save_root(const char *dir, int depth, char *out, size_t cap) {
+    if (has_save_files(dir)) return snprintf(out, cap, "%s", dir) < (int)cap;
+    if (!depth) return 0;
+    Listing l;
+    if (list_dir(dir, &l)) return 0;
+    qsort(l.e, (size_t)l.n, sizeof *l.e, name_cmp_listed);
+    int got = 0;
+    for (int i = l.n - 1; i >= 0 && !got; i--)   // the last name first: JKSV's newest dated folder
+        if (l.e[i].kind == PLAT_FS_DIR) {
+            char *sub = join(dir, l.e[i].name);
+            got = find_save_root(sub, depth - 1, out, cap);
+            free(sub);
+        }
+    listing_free(l.e, l.n);
+    return got;
+}
+
+// Every .sav under dir: count those that start with the save magic, note the highest version field, and with
+// set_version lower a higher one to it (a newer game's save for 1.0.0, which loads it then; docs/android-plan.md).
+static void sav_headers(const char *dir, uint32_t set_version, int *nsav, uint32_t *top, int *lowered) {
+    Listing l;
+    if (list_dir(dir, &l)) return;
+    for (int i = 0; i < l.n; i++) {
+        char *pth = join(dir, l.e[i].name);
+        size_t n = strlen(l.e[i].name);
+        if (l.e[i].kind == PLAT_FS_DIR) sav_headers(pth, set_version, nsav, top, lowered);
+        else if (n > 4 && !strcmp(l.e[i].name + n - 4, ".sav")) {
+            PlatFile *f = plat_fs_open(pth, set_version != 0, NULL);
+            uint32_t h[2];
+            if (f && plat_file_pread(f, h, 8, 0) == 8 && h[0] == SAVE_MAGIC) {
+                (*nsav)++;
+                if (h[1] > *top) *top = h[1];
+                if (set_version && h[1] > set_version && plat_file_pwrite(f, &set_version, 4, 4) == 4) (*lowered)++;
+            }
+            if (f) plat_file_close(f);
+        }
+        free(pth);
+    }
+    listing_free(l.e, l.n);
+}
+
+// The snapshots' names (digits first), oldest first.
+static int snapshot_names(char (*names)[48], int max) {
+    int n = 0;
+    Listing l;
+    list_dir(snap_root, &l);
+    for (int i = 0; i < l.n; i++)
+        if (l.e[i].kind == PLAT_FS_DIR && l.e[i].name[0] >= '0' && l.e[i].name[0] <= '9' && strlen(l.e[i].name) < 48 &&
+            n < max)
+            strcpy(names[n++], l.e[i].name);
+    listing_free(l.e, l.n);
+    qsort(names, (size_t)n, sizeof *names, name_cmp);
+    return n;
+}
+
+// A snapshot of the committed save, tx_lock held: every file a hard link to the committed one (committed files are
+// never written in place), a copy where linking fails. force: whatever the interval (before an import replaces the
+// save); suffix: added to the name ("before-import"). Then the oldest beyond TOTK_SAVE_SNAPSHOTS are deleted.
+static void snapshot_take(int force, const char *suffix) {
+    int keep = cfg_int("TOTK_SAVE_SNAPSHOTS"), every = cfg_int("TOTK_SAVE_SNAPSHOT_MINUTES");
+    if ((keep <= 0 && !force) || !exists(save_root) || count_entries(save_root) == 0) return;
+    static char names[128][48];
+    int n = snapshot_names(names, 128);
+    char name[48];
+    utc_name(name, sizeof name);
+    if (!force && n && every > 0) {   // the newest is younger than the interval: none yet
+        int y, mo, d, h, mi, sec;
+        if (sscanf(names[n - 1], "%4d%2d%2d-%2d%2d%2d", &y, &mo, &d, &h, &mi, &sec) == 6) {
+            int64_t then = utc_seconds(y, mo, d, h, mi, sec), now = (int64_t)(plat_unix_time_ns() / 1000000000u);
+            if (now - then < (int64_t)every * 60) return;
+        }
+    }
+    if (suffix) snprintf(name + strlen(name), sizeof name - strlen(name), "-%s", suffix);
+    char *dst = join(snap_root, name);
+    int nfiles = 0, linked = 0;
+    uint64_t bytes = 0;
+    make_dirs(snap_root);
+    if (exists(dst) || copy_tree(save_root, dst, save_root, 1, &nfiles, &linked, &bytes)) {
+        if (!exists(dst)) rt_log("fs: save snapshot %s failed", name);
+        free(dst);
+        return;
+    }
+    free(dst);
+    rt_log("fs: save snapshot %s: %d files, %d linked to the committed save", name, nfiles, linked);
+    n = snapshot_names(names, 128);
+    for (int i = 0; i + (keep > 0 ? keep : 1) < n; i++) {
+        char *pth = join(snap_root, names[i]);
+        remove_tree(pth);
+        free(pth);
+    }
+}
+
+// Start: a pending save becomes the committed save (after save_recover). The replaced save stays in save-backup (the
+// usual rotation) and as a snapshot; on 1.0.0 a newer game's version field is lowered to 1.0.0's.
+static void import_apply(void) {
+    if (!exists(pending_root)) return;
+    if (!has_save_files(pending_root)) {
+        rt_log("fs: save-import-pending holds no save files; deleted");
+        remove_tree(pending_root);
+        return;
+    }
+    int nsav = 0, lowered = 0;
+    uint32_t top = 0;
+    sav_headers(pending_root, RT_V100 ? SAVE_VERSION_100 : 0, &nsav, &top, &lowered);
+    snapshot_take(1, "before-import");
+    if (*ready_root) remove_tree(ready_root), *ready_root = 0;
+    if (exists(save_root) && move_dir(save_root, old_root, MOVE_TRIES)) {
+        rt_log("fs: cannot move the save aside for the imported one; it stays pending");
+        return;
+    }
+    if (move_dir(pending_root, save_root, MOVE_TRIES)) {
+        if (exists(old_root)) move_dir(old_root, save_root, MOVE_TRIES);
+        rt_log("fs: cannot move the imported save into place; the previous save stays");
+        return;
+    }
+    rotate_backup();
+    rt_log("fs: imported save loaded: %d .sav files, game version field %#x%s", nsav, top,
+           lowered ? " (lowered to 1.0.0's)" : "");
+}
+
+int fs_save_import_find(char *src, size_t cap) {
+    ready();
+    char dir[1100];
+    home_join(dir, sizeof dir, "save-import");
+    make_dirs(dir);
+    return find_save_root(dir, 4, src, cap);
+}
+
+int fs_save_stage(const char *src) {
+    ready();
+    char tmp[1200];
+    snprintf(tmp, sizeof tmp, "%s.tmp", pending_root);
+    remove_tree(tmp);
+    int nfiles = 0, linked = 0;
+    uint64_t bytes = 0;
+    if (!has_save_files(src) || copy_tree(src, tmp, NULL, 1, &nfiles, &linked, &bytes)) {
+        remove_tree(tmp);
+        rt_log("fs: cannot copy %s for the next start", src);
+        return -1;
+    }
+    remove_tree(pending_root);
+    if (move_dir(tmp, pending_root, MOVE_TRIES)) {
+        remove_tree(tmp);
+        return -1;
+    }
+    rt_log("fs: %s (%d files, %.1f MiB) loads at the next start", src, nfiles, bytes / 1048576.0);
+    return 0;
+}
+
+int fs_save_import_stage(void) {
+    char src[1100];
+    return fs_save_import_find(src, sizeof src) ? fs_save_stage(src) : -1;
+}
+
+int fs_save_pending(void) {
+    ready();
+    return exists(pending_root);
+}
+
+void fs_save_pending_cancel(void) {
+    ready();
+    remove_tree(pending_root);
+}
+
+int fs_save_export(char *out, size_t cap) {
+    ready();
+    save_wait_commit();
+    plat_mutex_lock(&tx_lock);
+    char dir[1100], name[48];
+    home_join(dir, sizeof dir, "save-export");
+    make_dirs(dir);
+    utc_name(name, sizeof name);
+    char *dst = join(dir, name);
+    int nfiles = 0, linked = 0, r = -1;
+    uint64_t bytes = 0;
+    if (!exists(dst) && !copy_tree(newest_save(), dst, NULL, 1, &nfiles, &linked, &bytes)) {
+        r = 0;
+        snprintf(out, cap, "save-export/%s", name);
+        rt_log("fs: save exported to %s: %d files, %.1f MiB", dst, nfiles, bytes / 1048576.0);
+    }
+    free(dst);
+    plat_mutex_unlock(&tx_lock);
+    return r;
+}
+
+int fs_save_snapshots(char (*names)[48], int max) {
+    ready();
+    static char all[128][48];
+    int n = snapshot_names(all, 128), k = 0;
+    for (int i = n - 1; i >= 0 && k < max; i--) strcpy(names[k++], all[i]);   // newest first
+    return k;
+}
+
+int fs_save_snapshot_stage(const char *name) {
+    ready();
+    if (strchr(name, '/') || strchr(name, '\\') || name[0] == '.') return -1;
+    char *src = join(snap_root, name);
+    int r = fs_save_stage(src);
+    free(src);
+    return r;
+}
+
 // ---- storage roots
 static void storage_init(void *param) {
     (void)param;
@@ -578,7 +853,10 @@ static void storage_init(void *param) {
     make_dirs(backup_root);
     snprintf(new_root, sizeof new_root, "%s/new", tx_root);
     snprintf(old_root, sizeof old_root, "%s/old", tx_root);
+    snprintf(snap_root, sizeof snap_root, "%s/save-snapshots", profile);
+    snprintf(pending_root, sizeof pending_root, "%s/save-import-pending", profile);
     save_recover();   // before save_root is created: an absent save_root means a commit to complete
+    import_apply();   // a save the player chose last time replaces it now, before the game reads it
     make_dirs(save_root);
     snprintf(p, sizeof p, "%s/temp", profile);
     remove_tree(p);
@@ -1467,6 +1745,73 @@ static int count_dirs(const char *dir) {
     return n;
 }
 
+// ---- the Game tab's save rows's import, export and snapshots, on the probe's profile (save-import and save-export beside it)
+static void probe_write(const char *dir, const char *name, uint32_t version) {
+    char *p = join(dir, name);
+    char *cut = plat_last_sep(p);
+    if (cut) {
+        *cut = 0;
+        make_dirs(p);
+        *cut = '/';
+    }
+    uint32_t h[4] = {SAVE_MAGIC, version, 16, 0};
+    CHECK(plat_file_write_atomic(p, h, sizeof h), "write %s", name);
+    free(p);
+}
+
+static uint32_t probe_version(const char *dir, const char *name) {
+    char *p = join(dir, name);
+    PlatFile *f = plat_file_open(p);
+    free(p);
+    uint32_t h[2] = {0, 0};
+    if (f) independent_read(f, h, 8, 0), plat_file_close(f);
+    return h[0] == SAVE_MAGIC ? h[1] : 0;
+}
+
+static void probe_save_menu(const uint64_t *uid) {
+    char out[96], home[1100], src[1100];
+    CHECK(tx_write("save:/before.sav", 7) && tx_commit() == 0, "a save to export and to replace");
+    CHECK(fs_save_export(out, sizeof out) == 0, "export the save");
+    home_join(home, sizeof home, out);
+    char *exp = join(home, "before.sav");
+    CHECK(plat_fs_kind(exp) == PLAT_FS_FILE, "the exported save in %s", home);
+    free(exp);
+    // a JKSV-style dump two folders down, from a newer game (version field above 1.0.0's)
+    home_join(home, sizeof home, "save-import/TotK/2026-01-02_10-00-00");
+    probe_write(home, "option.sav", 0x0049E946u);
+    probe_write(home, "slot_00/progress.sav", 0x0049E946u);
+    CHECK(fs_save_import_find(src, sizeof src) && !strcmp(src, home), "the import folder found two levels down");
+    CHECK(fs_save_import_stage() == 0 && fs_save_pending(), "import staged for the next start");
+    plat_setenv("TOTK_SAVE_SNAPSHOTS", "2");
+    plat_mutex_lock(&lock);   // a restart as probe_restart makes one, with the import where storage_init runs it
+    for (int i = 0; i < NMOUNTS; i++)
+        if (mounts[i].kind == M_SAVE) mounts[i].kind = M_FREE;
+    plat_mutex_unlock(&lock);
+    save_mounts = 0;
+    plat_xchg32(&save_dirty, 0);
+    save_recover();
+    import_apply();
+    CHECK(RES(S_MOUNT_SAVE, U("save"), U(uid)) == 0, "MountSaveData after the import");
+    CHECK(!fs_save_pending() && probe_version(save_root, "slot_00/progress.sav") ==
+          (RT_V100 ? SAVE_VERSION_100 : 0x0049E946u), "the imported save committed (1.0.0: its version lowered)");
+    static char names[16][48];
+    int n = fs_save_snapshots(names, 16);
+    CHECK(n >= 1 && strstr(names[0], "before-import"), "the save the import replaced kept as a snapshot");
+    plat_mutex_lock(&tx_lock);
+    snapshot_take(1, "probe-a"), snapshot_take(1, "probe-b"), snapshot_take(1, "probe-c");
+    plat_mutex_unlock(&tx_lock);
+    n = fs_save_snapshots(names, 16);
+    CHECK(n == 2 && strstr(names[0], "probe-c"), "snapshots pruned to TOTK_SAVE_SNAPSHOTS (%d kept)", n);
+    CHECK(fs_save_snapshot_stage(names[1]) == 0 && fs_save_pending(), "a snapshot staged");
+    fs_save_pending_cancel();
+    CHECK(!fs_save_pending(), "a staged save cancelled");
+    plat_setenv("TOTK_SAVE_SNAPSHOTS", NULL);
+    home_join(home, sizeof home, "save-import/TotK");   // beside the temporary profile: the probe's own folders
+    remove_tree(home);
+    home_join(home, sizeof home, out);
+    remove_tree(home);
+}
+
 static void probe_save_tx(const uint64_t *uid) {
     const char *a = "save:/tx_a.sav", *b = "save:/tx_b.sav";
     uint64_t h = 0;
@@ -1691,6 +2036,7 @@ static void probe_storage(void) {
           RES(S_ENTRY_TYPE, U(&type), U("save:/dir")) == FS_R_PATH_NOT_FOUND, "DeleteDirectoryRecursively");
     CHECK(tx_commit() == 0 && !fs_save_busy(), "Commit after the changes");
     probe_save_tx(uid);
+    probe_save_menu(uid);
 
     // temporary and cache storage
     CHECK(RES(S_MOUNT_TEMP, U("temp")) == 0 && RES(S_CREATE_FILE, U("temp:/t.bin"), 4) == 0 && !fs_save_busy(),

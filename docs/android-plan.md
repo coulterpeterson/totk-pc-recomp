@@ -195,6 +195,12 @@ Done, and how it was checked:
   (blocks behind the patch area, `tools/native/veneers.py`; [native-execution.md](native-execution.md) milestone 5):
   1.4.3 native plays at 46.9 / 46.6 fps against 45.2 / 47.6 lifted in alternating runs, even, since the graphics
   pipeline bounds the frame.
+- Daily driving native 1.4.3 (2026-11-03): it draws about 10% less power than lifted for the same frames
+  ([native-execution.md](native-execution.md) milestone 5), crashes in guest code are reported again, and a
+  30-minute session on the save ran without a stop at 47.6 fps (speed 1.000) with motion from the device's own
+  sensors and the shaders prepared in the background: the 46,671 seed variants of 1.4.3, 22,885 left to translate
+  after earlier runs, in 449 s with one translator, 0 failed, the frame rate unchanged meanwhile. Saves import from
+  `save-import/`, export to `save-export/` and keep snapshots (menu Game tab, `--probe-fs` covers all three).
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game

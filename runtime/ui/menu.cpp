@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "imgui.h"
 #include "imgui_internal.h"   // SetFocusID, NavCursorVisible
@@ -54,6 +55,7 @@ void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
 int res_is_16x9(unsigned w, unsigned h);
 int res_own_share_pct(void);
+int gfx_shader_prepare_progress(uint64_t *done, uint64_t *total);
 int rt_patch_set(const char *name);
 int vk_hdr_offered(void);
 double frame_step_limit_hz(void);
@@ -728,6 +730,8 @@ static void tab_screen(float scale) {
     opt_end();
 }
 
+static void rows_save(void);
+
 static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
@@ -735,6 +739,7 @@ static void tab_game(float scale) {
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("TOTK_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
     opt_toggle("TOTK_ASSUME_FOCUS", UI_MENU_ASSUME_FOCUS, UI_MENU_ASSUME_FOCUS_DESC);
+    rows_save();
     opt_end();
 }
 
@@ -948,6 +953,89 @@ static const char *action_value(const ActionNote &a, UiTextId done_text) {
 
 static void action_done(ActionNote &a, bool ok) { a = {plat_now_ns() + 3000000000ull, ok ? 1 : -1}; }
 
+// A snapshot's name (UTC "YYYYMMDD-HHMMSS..." from fs_host.c) as local date and time.
+static void snapshot_label(const char *name, char *out, size_t cap) {
+    struct tm t = {};
+    if (sscanf(name, "%4d%2d%2d-%2d%2d%2d", &t.tm_year, &t.tm_mon, &t.tm_mday, &t.tm_hour, &t.tm_min, &t.tm_sec) != 6) {
+        snprintf(out, cap, "%s", name);
+        return;
+    }
+    t.tm_year -= 1900, t.tm_mon -= 1;
+#ifdef _WIN32
+    time_t at = _mkgmtime(&t);
+#else
+    time_t at = timegm(&t);
+#endif
+    struct tm *loc = localtime(&at);
+    if (!loc || !strftime(out, cap, "%Y-%m-%d %H:%M", loc)) snprintf(out, cap, "%s", name);
+}
+
+// The Game tab's save rows (fs_host.c "save import, export and snapshots"): a save to import from the save-import
+// folder, the save exported, the snapshot settings and the snapshots to go back to. A save chosen here loads at the next
+// start; the folders are looked at once a second, not every frame.
+static void rows_save(void) {
+    static ActionNote import_note, export_note, snap_note;
+    static char exported[96], chosen_snap[48];
+    static uint64_t scanned_ns;
+    static int found, pending, nsnap;
+    static char snaps[12][48];
+    uint64_t now = plat_now_ns();
+    if (!scanned_ns || now - scanned_ns > 1000000000ull) {
+        char src[1100];
+        found = fs_save_import_find(src, sizeof src);
+        pending = fs_save_pending();
+        nsnap = fs_save_snapshots(snaps, 12);
+        scanned_ns = now;
+    }
+    opt_group(UI_MENU_SAVE_GROUP);
+    if (pending) {
+        opt_text(UI_MENU_SAVE_PENDING, true);
+        if (opt_button("##save_cancel", UI_MENU_SAVE_PENDING_CANCEL, UI_MENU_SAVE_PENDING_CANCEL_DESC)) {
+            fs_save_pending_cancel();
+            scanned_ns = 0;
+        }
+    }
+    opt_group(UI_MENU_SAVE_IMPORT_GROUP);
+    opt_text(UI_MENU_SAVE_IMPORT_HELP);
+    if (!found) opt_disable_next(UI_MENU_SAVE_IMPORT_NONE);
+    if (opt_button("##save_import", UI_MENU_SAVE_IMPORT, UI_MENU_SAVE_IMPORT_DESC,
+                   action_value(import_note, UI_MENU_SAVE_STAGED))) {
+        action_done(import_note, fs_save_import_stage() == 0);
+        scanned_ns = 0;
+    }
+    bool shown = export_note.result > 0 && now < export_note.until;
+    if (opt_button("##save_export", UI_MENU_SAVE_EXPORT, UI_MENU_SAVE_EXPORT_DESC,
+                   shown ? exported : action_value(export_note, UI_MENU_SAVE_EXPORT)))
+        action_done(export_note, fs_save_export(exported, sizeof exported) == 0);
+    opt_group(UI_MENU_SAVE_SNAP_GROUP);
+    static const char *const counts[] = {"0", "5", "10", "20", "50"};
+    const char *count_names[] = {menu_text(UI_MENU_OFF), "5", "10", "20", "50"};
+    opt_choice_list("TOTK_SAVE_SNAPSHOTS", UI_MENU_SAVE_SNAPSHOTS, counts, count_names, 5, UI_MENU_SAVE_SNAPSHOTS_DESC);
+    static const char *const mins[] = {"10", "30", "60", "120"};
+    char min_text[4][32];
+    const char *min_names[4];
+    for (int i = 0; i < 4; i++) {
+        snprintf(min_text[i], sizeof min_text[i], menu_text(UI_MENU_SAVE_MINUTES), atoi(mins[i]));
+        min_names[i] = min_text[i];
+    }
+    opt_choice_list("TOTK_SAVE_SNAPSHOT_MINUTES", UI_MENU_SAVE_SNAP_EVERY, mins, min_names, 4,
+                    UI_MENU_SAVE_SNAP_EVERY_DESC);
+    if (!nsnap) opt_text(UI_MENU_SAVE_SNAP_NONE);
+    for (int i = 0; i < nsnap; i++) {
+        char label[64], id[64];
+        snapshot_label(snaps[i], label, sizeof label);
+        snprintf(id, sizeof id, "##snap_%s", snaps[i]);
+        const char *note = strstr(snaps[i], "before-import") ? menu_text(UI_MENU_SAVE_SNAP_BEFORE_IMPORT) : nullptr;
+        bool chosen = snap_note.result > 0 && now < snap_note.until && !strcmp(snaps[i], chosen_snap);
+        if (opt_text_row(id, label, chosen ? menu_text(UI_MENU_SAVE_STAGED) : menu_text(UI_MENU_SAVE_SNAP_LOAD), note,
+                         menu_text(UI_MENU_SAVE_SNAP_LOAD_DESC), false) == 2) {
+            action_done(snap_note, fs_save_snapshot_stage(snaps[i]) == 0);
+            snprintf(chosen_snap, sizeof chosen_snap, "%s", snaps[i]);   // which row says so
+            scanned_ns = 0;
+        }
+    }
+}
+
 static void tab_advanced(float scale) {
     static ActionNote copy_note;
 #ifndef __ANDROID__
@@ -968,6 +1056,7 @@ static void tab_advanced(float scale) {
     static const UiTextId skip[] = {UI_MENU_PIPE_SKIP_STRICT, UI_MENU_PIPE_SKIP_ANY, UI_MENU_PIPE_SKIP_FULLSCREEN};
     opt_choice("TOTK_PIPE_SKIP", UI_MENU_PIPE_SKIP, skip, 3, UI_MENU_PIPE_SKIP_DESC);
     opt_toggle("TOTK_LIB_PREBUILD", UI_MENU_LIB_PREBUILD, UI_MENU_LIB_PREBUILD_DESC);
+    opt_toggle("TOTK_SHADER_PREPARE", UI_MENU_SHADER_PREPARE, UI_MENU_SHADER_PREPARE_DESC);
     row_threads("TOTK_LIB_PREBUILD_THREADS", UI_MENU_LIB_PREBUILD_THREADS, UI_MENU_LIB_PREBUILD_THREADS_DESC);
     opt_toggle("TOTK_PIPE_PREBUILD", UI_MENU_PIPE_PREBUILD, UI_MENU_PIPE_PREBUILD_DESC);
     row_threads("TOTK_PREWARM_XLATE", UI_MENU_PREWARM_XLATE, UI_MENU_PREWARM_XLATE_DESC);
@@ -1504,6 +1593,36 @@ static void perf_draw(const MenuTarget *t, float scale) {
     dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
 }
 
+// The background shader preparation's bar (gfx_shader.c gfx_shader_prepare_background), at the top in the middle,
+// where the game's HUD leaves room: the share done while it runs, then "ready" for 5 s. 1 while there is one to draw.
+static bool prep_bar_wanted(void) {
+    static uint64_t done_at;
+    uint64_t done, total;
+    int st = gfx_shader_prepare_progress(&done, &total);
+    if (st == 2 && !done_at) done_at = plat_now_ns();
+    return (st == 1 && total) || (st == 2 && plat_now_ns() - done_at < 5000000000ull);
+}
+
+static void prep_bar_draw(const MenuTarget *t, float scale) {
+    if (!prep_bar_wanted()) return;
+    uint64_t done, total;
+    int st = gfx_shader_prepare_progress(&done, &total);
+    float frac = st == 2 || !total ? 1.0f : (float)done / (float)total;
+    char text[96];
+    if (st == 2) snprintf(text, sizeof text, "%s", menu_text(UI_MENU_SHADER_PREP_DONE));
+    else snprintf(text, sizeof text, menu_text(UI_MENU_SHADER_PREP_BAR), (int)(frac * 100));
+    ImDrawList *dl = g_open.load(std::memory_order_relaxed) ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+    ImVec2 sz = ImGui::CalcTextSize(text);
+    // one line, text then bar, so the box stays above the menu's window when that is open
+    float pad = 6 * scale, bw = 140 * scale, bh = 6 * scale, w = sz.x + pad * 4 + bw;
+    ImVec2 p((float)t->width * 0.5f - w * 0.5f, 12 * scale);
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 150), 4 * scale);
+    dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), text);
+    ImVec2 b(p.x + pad * 3 + sz.x, p.y + pad + (sz.y - bh) * 0.5f);
+    dl->AddRectFilled(b, ImVec2(b.x + bw, b.y + bh), IM_COL32(255, 255, 255, 90), bh * 0.5f);
+    dl->AddRectFilled(b, ImVec2(b.x + bw * frac, b.y + bh), IM_COL32(120, 200, 160, 230), bh * 0.5f);
+}
+
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
     *shot = NULL;
     cheats_frame(frame);   // the data cheats and the buttons of the cheats that need them held
@@ -1521,7 +1640,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
             g_tab_request = 0;
             set_open(1);
             open = true;
-        } else if (!g_perf_mode) {
+        } else if (!g_perf_mode && !prep_bar_wanted()) {
             return 0;
         }
     }
@@ -1571,6 +1690,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     ImGui::NewFrame();
     if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);
+    prep_bar_draw(t, scale);
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
     g_cost_ns += plat_now_ns() - t0;

@@ -67,6 +67,10 @@ void gfx_shader_prepare_recorded(int threads, int procs);
 // totk.exe --prepare-shaders: translates <dir>/seed-answers.bin + seed-programs.bin (tools/prepare_shaders.py) and
 // writes <dir>/shader-prepared.bin (stage, priority, input id per variant). 0 on success.
 int gfx_shader_prepare_seed(const char *dir, int threads, int procs);
+// The same in the background while the game runs (TOTK_SHADER_PREPARE): <dir>'s seed unless <dir>/shader-prepared.bin
+// says it was done. gfx_shader_prepare_progress: 1 running, 2 finished, 0 or -1 nothing to show; *done of *total.
+void gfx_shader_prepare_background(const char *dir);
+int gfx_shader_prepare_progress(uint64_t *done, uint64_t *total);
 typedef struct { uint8_t iid[32]; uint8_t stage, prio; } GfxWarmEnt;   // prio 0: met in play; 1..3: prepared
 size_t gfx_shader_warm_list(GfxWarmEnt **out);              // malloc'd; recorded first, then prepared; needs recording on
 // Disk-cache load the caller owns (*owned 1: release it), or the memory cache's entry (*owned 0). NULL if not cached.

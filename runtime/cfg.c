@@ -49,7 +49,7 @@ static const char *const known[] = {
     "PROFILE_MAIN", "PROFILE_RENDER", "PROMPTS", "PUSH_SKIP", "PUSH_STAGE", "RDOC", "RDOC_DIR", "RDOC_DLL", "REALTIME", "REC_END", "REEXEC",
     "RENDER_SCALE", "REPLAY_ASYNC",
     "REPLAY_CHECK", "RESOLVE_CHECK", "RESTART_WAIT", "ROMFS", "ROMFS_INDEX", "ROMFS_MMAP", "ROMFS_MODS", "ROMFS_PATCHES",
-    "ROMFS_PROOF_DIR", "ROMFS_VERIFY", "RSTICK_DEADZONE", "RUMBLE", "RUMBLE_CURVE", "RUMBLE_STRENGTH", "RUMBLE_TRIGGERS", "SHADER_CACHE",
+    "ROMFS_PROOF_DIR", "ROMFS_VERIFY", "RSTICK_DEADZONE", "RUMBLE", "RUMBLE_CURVE", "RUMBLE_STRENGTH", "RUMBLE_TRIGGERS", "SAVE_SNAPSHOTS", "SAVE_SNAPSHOT_MINUTES", "SHADER_CACHE", "SHADER_PREPARE",
     "SHADER_MEMO", "SHADOW_RANGE", "SHADOW_RES", "SHADOW_SCALE", "SHARED_FONTS", "SHARPNESS", "SHOTS", "SHOTS_DIR",
     "SHOTS_FULL", "SPEED_PROBE", "SPIN", "SPIN_HANDOFF_US", "SPLIT_DRAWS", "SPLIT_US", "STICK_DEADZONE", "STICK_SENS",
     "SWKBD_ANSWER",
@@ -76,7 +76,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"PCSS", "display"},
     {"MODS_DIR", "mods"}, {"MODS_ORDER", "mods"}, {"MODS_DISABLED", "mods"}, {"MODS_REBUILD", "mods"},
     {"MENU_LANG", "language"}, {"LANG", "language"}, {"OPERATION_MODE", "language"},
-    {"VOLUME", "audio"},
+    {"VOLUME", "audio"}, {"SAVE_SNAPSHOTS", "files"}, {"SAVE_SNAPSHOT_MINUTES", "files"},
     {"MOTION", "input"}, {"RUMBLE_STRENGTH", "input"}, {"RUMBLE_CURVE", "input"}, {"RUMBLE_TRIGGERS", "input"},
     {"PAD_LAYOUT", "input"}, {"PROMPTS", "input"}, {"STICK_DEADZONE", "input"}, {"LSTICK_DEADZONE", "input"}, {"RSTICK_DEADZONE", "input"},
     {"STICK_SENS", "input"},
@@ -89,7 +89,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"BIND_RSTICK_UP", "input"}, {"BIND_RSTICK_RIGHT", "input"}, {"BIND_RSTICK_DOWN", "input"},
     {"ASYNC_PREEMPT", "performance"}, {"REPLAY_ASYNC", "performance"}, {"FREE_CORES", "performance"}, {"WAIT_SPIN", "performance"},
     {"TIMER_1MS", "performance"}, {"PIPE_WAIT", "performance"}, {"PIPE_SKIP", "performance"},
-    {"LIB_PREBUILD", "performance"}, {"LIB_PREBUILD_THREADS", "performance"}, {"PIPE_PREBUILD", "performance"},
+    {"LIB_PREBUILD", "performance"}, {"SHADER_PREPARE", "performance"}, {"LIB_PREBUILD_THREADS", "performance"}, {"PIPE_PREBUILD", "performance"},
     {"PREWARM_XLATE", "performance"}, {"GPL", "performance"}, {"GPU_TIME", "performance"}, {"PLACED", "performance"}, {"ASTC", "performance"}, {"MEMORY", "performance"},
     {"TEX_ALIAS", "performance"}, {"TEX_VRAM_PRESSURE", "performance"}, {"ASTC_BC", "performance"}, {"LOD_GUARD", "performance"}, {"FIX_C0", "performance"}, {"FIX_ZERO", "performance"},
     {"BIND_SKIP", "performance"}, {"SHADER_MEMO", "performance"}, {"PIPE_MEMO", "performance"}, {"TEX_MEMO", "performance"}, {"DESC_TEMPLATE", "performance"},
@@ -136,6 +136,7 @@ static const CfgMeta metas[] = {
     {"ASSUME_FOCUS", "1", "0|1", LIVE},   // read on every focus change (ov_system.c)
     // Sound, Controls, Menu
     {"VOLUME", "100", "0..100", LIVE},
+    {"SAVE_SNAPSHOTS", "10", "0|5|10|20|50", LIVE}, {"SAVE_SNAPSHOT_MINUTES", "30", "10|30|60|120", LIVE},
     {"MOTION", "1", "0|1", LIVE}, {"RUMBLE_STRENGTH", "130", "0..300", LIVE}, {"RUMBLE_CURVE", "0.6", "0.2..1.5", LIVE},
     {"RUMBLE_TRIGGERS", "0", "0|1", LIVE}, {"PAD_LAYOUT", "auto", "auto|nintendo|xbox", LIVE},
     {"PROMPTS", "nintendo", "nintendo|xbox", RESTART},
@@ -150,7 +151,7 @@ static const CfgMeta metas[] = {
     {"FREE_CORES", "0", "0|1", RESTART}, {"TIMER_1MS", "1", "0|1", RESTART}, {"WAIT_SPIN", "0", "0..1000", RESTART},
     // shaders and pipelines
     {"PIPE_WAIT", "default", "default|draw", RESTART}, {"PIPE_SKIP", "fullscreen", "strict|any|fullscreen", RESTART},
-    {"LIB_PREBUILD", "1", "0|1", RESTART}, {"LIB_PREBUILD_THREADS", "", "1..64", RESTART},
+    {"LIB_PREBUILD", "1", "0|1", RESTART}, {"SHADER_PREPARE", "0", "0|1", RESTART}, {"LIB_PREBUILD_THREADS", "", "1..64", RESTART},
     {"PIPE_PREBUILD", "1", "0|1", RESTART}, {"PREWARM_XLATE", "", "1..64", RESTART}, {"GPL", "", "0|1", RESTART},
     // textures and memory
     {"ASTC", "auto", "auto|gpu|native|cpu", RESTART}, {"GPU_TIME", "completion", "completion|record", RESTART}, {"PLACED", "1", "0|1", RESTART}, {"MEMORY", "auto", "auto|import|mirror|verify", RESTART},
@@ -275,10 +276,11 @@ static const ProfileKey DECK[] = {
 // the present; at most 60 fps with the real-time step (a faster SoC reaches it; the Thor in performance mode plays at
 // about 40, and with the real-time step a slower frame slows nothing down); fifo, the present mode every Android driver
 // has; the game pauses while the app is in the background, as on the Switch's Home screen; timestamp reports stamped
-// when the replay records them (vk_exec_xfer.c gpu_time_at_record).
+// when the replay records them (vk_exec_xfer.c gpu_time_at_record); the shader seed beside the game data translated in
+// the background while the game runs, as nothing translated them before (gfx_shader.c gfx_shader_prepare_background).
 static const ProfileKey ANDROID[] = {
     {"FULLSCREEN", "1"}, {"OPERATION_MODE", "handheld"}, {"FPS_LIMIT", "60"},
-    {"VK_PRESENT", "fifo"}, {"ASSUME_FOCUS", "0"}, {"GPU_TIME", "record"},
+    {"VK_PRESENT", "fifo"}, {"ASSUME_FOCUS", "0"}, {"GPU_TIME", "record"}, {"SHADER_PREPARE", "1"},
 };
 static const struct { const char *name; const ProfileKey *keys; size_t count; } PROFILES[] = {
     {"desktop", NULL, 0}, {"deck", DECK, sizeof DECK / sizeof *DECK}, {"android", ANDROID, sizeof ANDROID / sizeof *ANDROID},

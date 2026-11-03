@@ -362,6 +362,13 @@ void rt_boot(void) {
     rt_log("boot: guest starts %llu ms after process start (%llu ms of it waiting for the prewarm)",
            (unsigned long long)(plat_process_uptime_ns() / 1000000), (unsigned long long)held);
     rt_guest_start_ns = kern_now_ns();
+    if (cfg_bool("TOTK_SHADER_PREPARE")) {   // the seed beside the game data: the folder that holds exefs
+        char dir[1024];
+        snprintf(dir, sizeof dir, "%s", rt_config()->exefs);
+        char *cut = plat_last_sep(dir);
+        if (cut) *cut = 0;
+        gfx_shader_prepare_background(dir);
+    }
     kern_run_on_guest_main(guest_main);
     rt_fatal("boot: the guest main thread ended");
 }

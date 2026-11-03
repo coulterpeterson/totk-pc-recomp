@@ -40,10 +40,14 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
   R3 together cycle the overlay. The menu shows the Android defaults as such and leaves out rows that cannot apply
   (window size, graphics card, DLSS, HDR on a screen without it) or that the game version has no patch for
 - The game pauses while the app is in the background, as on the Switch's Home screen
+- Save import, export and snapshots from the menu's Game tab: drop an Eden, Ryujinx or JKSV/Checkpoint save into
+  `files/save-import`, export to `files/save-export`, and keep up to 50 automatic snapshots to go back to
+- Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none
+- Shaders prepared in the background on first play, with a progress bar, so new places do not stutter later
 - Mods and Atmosphère cheats as upstream, from the app's data folder (`files/mods`)
 - The game's own launcher icon, taken from your dump
-- Experimental: native execution, which runs the game's own ARM64 code instead of the lifted C
-  ([docs/native-execution.md](docs/native-execution.md))
+- Native execution, which runs the game's own ARM64 code instead of the lifted C, for 1.0.0 and 1.4.3
+  ([docs/native-execution.md](docs/native-execution.md)): the same frame rate on the Thor for about 10% less power
 
 ## How it got to 40 fps
 
@@ -106,12 +110,13 @@ You need:
    ```
 
 4. Libraries for Android, then lift the game to C and compile `libtotk.so`. The generated C is about 1 GB, and a
-   clean compile takes a while:
+   clean compile takes a while. The last line writes the shader seed the game prepares in the background:
 
    ```sh
    .venv/bin/python tools/build_android_deps.py
    .venv/bin/python recomp/gen.py --exefs build/extracted/v0/exefs --out generated/v0-android --target android --patches recomp/patches-v0.txt
    .venv/bin/python tools/build_game.py --version v0 --gen generated/v0-android --target android
+   .venv-py314/bin/python tools/prepare_shaders.py build/v0-android --version v0 --no-run --romfs build/extracted/v0/romfs --exefs build/extracted/v0/exefs
    ```
 
 5. The shader translator for Android, in an arm64 container, with the NDK's prebuilt toolchain folder mounted. Use

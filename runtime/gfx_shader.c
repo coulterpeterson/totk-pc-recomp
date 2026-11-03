@@ -1886,11 +1886,14 @@ static void prg_collect(const uint8_t *rec, void *ctx) {
     l->idx[l->n++].rec = rec;
 }
 
+static volatile int64_t prep_done, prep_total;   // the preparation running now, for gfx_shader_prepare_progress
+
 static void prep_worker(void *arg) {
     Prep *p = arg;
     for (;;) {
         size_t i = (size_t)plat_inc64(&p->next) - 1;
         if (i >= p->n_ans) return;
+        plat_inc64(&prep_done);
         const uint8_t *r = p->ans + i * ANS_REC;
         uint8_t key_rec[12 + 32];
         memcpy(key_rec + 12, r + 4, 32);
@@ -1933,7 +1936,9 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
     qsort(p.progs.idx, p.progs.n, sizeof *p.progs.idx, prg_cmp);
     uint64_t xl0 = (uint64_t)n_xlated;
     threads = threads < 1 ? 1 : threads > 64 ? 64 : threads;
-    svc_set_limit(procs);
+    plat_xchg64(&prep_done, 0);
+    plat_xchg64(&prep_total, (int64_t)p.n_ans);
+    if (procs > 0) svc_set_limit(procs);   // 0: the translators play uses (the background preparation)
     PlatThread *t[64];
     int k = 0;
     for (int i = 0; i < threads; i++)
@@ -1943,7 +1948,7 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
         while (!plat_thread_join_ns(t[m], 5000000000u))
             rt_log("gfx_shader: prepare: %lld of %zu pairs, %llu translated, %.0f ms", (long long)p.done, p.n_ans,
                    (unsigned long long)((uint64_t)n_xlated - xl0), (double)plat_now_ms() - t0);
-    svc_set_limit(svc_runtime_limit());
+    if (procs > 0) svc_set_limit(svc_runtime_limit());
     rt_log("gfx_shader: prepare: %zu %s of %zu programs: %llu translated, %lld failed, %lld without a program, the rest "
            "cached; %.0f ms", p.n_ans, what, p.progs.n, (unsigned long long)((uint64_t)n_xlated - xl0), (long long)p.failed,
            (long long)p.missing, (double)plat_now_ms() - t0);
@@ -2008,6 +2013,49 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
     printf("%s\n", msg);
     free(file), free(recs), free(iid), free(ab);
     return ok ? 0 : 1;
+}
+
+// ---- background preparation (TOTK_SHADER_PREPARE, the Android profile): the seed beside the game data translated on
+// one thread while the game runs, title and warm-up variants first, with the translators play uses, so a shader the
+// game needs now waits for at most one preparation. A run that stops halfway loses nothing: what it translated is in
+// the cache, and the next start finds those as cache hits. shader-prepared.bin beside the seed marks it finished.
+static volatile int32_t bg_state;   // 0 not started, 1 running, 2 finished, -1 no seed or already done
+static char bg_dir[PATH_CAP];
+
+static void bg_main(void *arg) {
+    (void)arg;
+    uint64_t t0 = plat_now_ms();
+    int r = gfx_shader_prepare_seed(bg_dir, 1, 0);
+    plat_xchg32(&bg_state, r ? -1 : 2);
+    rt_log("gfx_shader: background preparation %s after %.0f s", r ? "stopped" : "finished",
+           (double)(plat_now_ms() - t0) / 1000.0);
+}
+
+void gfx_shader_prepare_background(const char *dir) {
+    char seed[PATH_CAP + 32], done[PATH_CAP + 32];
+    snprintf(seed, sizeof seed, "%s/seed-answers.bin", dir);
+    snprintf(done, sizeof done, "%s/shader-prepared.bin", dir);
+    PlatFileId s, d;
+    PlatFile *fs = plat_fs_open(seed, 0, NULL), *fd = plat_fs_open(done, 0, NULL);
+    int have_seed = fs && plat_file_id(fs, &s), finished = fd && plat_file_id(fd, &d);
+    if (fs) plat_file_close(fs);
+    if (fd) plat_file_close(fd);
+    if (!have_seed || finished) {
+        plat_xchg32(&bg_state, -1);
+        rt_log("gfx_shader: background preparation: %s", !have_seed ? "no seed beside the game data" : "done before");
+        return;
+    }
+    snprintf(bg_dir, sizeof bg_dir, "%s", dir);
+    plat_xchg32(&bg_state, 1);
+    if (!plat_thread_spawn(bg_main, NULL, "shader prepare bg", 0)) plat_xchg32(&bg_state, -1);
+    else rt_log("gfx_shader: background preparation of %s started", seed);
+}
+
+int gfx_shader_prepare_progress(uint64_t *done, uint64_t *total) {
+    int st = plat_cas32(&bg_state, 0, 0);
+    *done = (uint64_t)__atomic_load_n(&prep_done, __ATOMIC_RELAXED);
+    *total = (uint64_t)__atomic_load_n(&prep_total, __ATOMIC_RELAXED);
+    return st;
 }
 
 // The variants the boot prebuild warms, most likely first: every input id play recorded (shader-answers.bin, priority

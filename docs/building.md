@@ -277,8 +277,22 @@ app copies it to its private storage and loads it through libadrenotools (`TOTK_
 driver_load), which `tools/build_android_deps.py` builds. On the AYN Thor (Adreno 740) Turnip v26.0.0 R8 renders the
 game cleanly where Qualcomm's driver 0676.53 draws black tiles over moving characters.
 
-Shaders are translated on the device the first time they are met (the translator runs from the APK's native library
-folder), so the first minutes stutter until the cache in the data folder fills.
+Shaders are translated on the device: the game's shaders, listed ahead in a seed, in the background while the game
+runs (the Android profile's `shader_prepare = 1`), and any other the first time it is met (the translator runs from the
+APK's native library folder). The seed comes from the game files on the build machine and goes beside the game data
+with the next `tools/install_android.py` (it is about 230 MB); the cache key includes what the device's GPU reports, so
+the translation itself happens on the device. A bar at the top of the screen shows how far it is; on the AYN Thor the
+46,671 variants of 1.4.3 take 12-13 minutes with one translator, and a run that stops halfway goes on at the next start:
+
+```sh
+.venv-py314/bin/python tools/prepare_shaders.py build/v143-android --version v143 --no-run --romfs build/extracted/v143/romfs --exefs build/extracted/v143/exefs
+```
+
+Saves: the menu's Game tab imports a save copied into `save-import/` of the data folder (Eden's `0100F2C0115B6000`
+folder, a JKSV or Checkpoint dump; it loads at the next start, and on 1.0.0 a newer game's version field is lowered to
+1.0.0's), exports the save to `save-export/` and keeps snapshots (`save_snapshots`, `save_snapshot_minutes`), any of
+which loads again at the next start. Motion controls read the device's own gyro and accelerometer when the controller
+reports none, as the Thor's built-in one does.
 
 ## Checks
 

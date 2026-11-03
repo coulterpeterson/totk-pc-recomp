@@ -176,6 +176,16 @@ must check the slot is still empty when it creates each guest thread.
      native 46.9 and 46.6 fps, lifted 45.2 and 47.6, speed 1.000 in all; walk 6.2-6.5 ms and GPU after the last part
      12.8-13.3 ms in every run. Even, as on 1.0.0: the frame is bound by the graphics pipeline, so native execution's
      15-25% less game-thread CPU does not show in the frame rate yet.
+   - Power (2026-11-03): with the battery full, the device draws everything over USB, so `usb/current_now` times
+     `usb/voltage_now` (plus any battery discharge) is its power. Two minutes of 2 s samples after a 150 s warm-up,
+     alternating builds: at the 30 fps cap, where both do the same work, native 6.79 / 6.87 W against lifted 7.60 /
+     7.57 W, 10% less; at the 60 cap native 9.72 / 9.79 W at 45.4 / 47.8 fps against lifted 9.83 / 10.45 W at 43.9 /
+     44.7 fps, about 9% less energy a frame.
+   - Crash reports: a branch from guest code to an address with no code (the zstd gate above, before its fix) faulted
+     outside every code range, so the fault handler took it for no guest crash and Android's default action ended the
+     process without a report. `platform/linux.c` fault_handler now also counts a fault whose x30 is in guest code;
+     reproduced, the report names the address, the caller (`lr main+0xbdc8ec`, the zstd site), the registers and the
+     guest frames.
 
 ## What to expect
 

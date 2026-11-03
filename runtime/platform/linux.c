@@ -1231,6 +1231,11 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
 #endif
     Dl_info at, self;
     int guest = crash_guest && crash_guest(rip);
+#if defined(__aarch64__)
+    // A branch from guest code to an address that holds no code (native execution: a page without its gate) faults
+    // with the pc there; x30 still names the guest caller after a bl.
+    guest = guest || (crash_guest && crash_guest((uintptr_t)u->uc_mcontext.regs[30]));
+#endif
     if (crash_fn && dladdr((void *)plat_crash_hook, &self) &&
         (guest || (dladdr((void *)rip, &at) && at.dli_fbase == self.dli_fbase))) {
         PlatCrash c = {sig == SIGSEGV ? "access violation" : sig == SIGBUS ? "bus error"

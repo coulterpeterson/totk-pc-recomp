@@ -308,6 +308,12 @@
 # Folder with the Switch shared fonts (BFTTF files, tools/extract_fonts.py output), for Chinese and Korean text.
 # Default: shared-fonts next to totk.exe. TOTK_SHARED_FONTS overrides it.
 # shared_fonts =
+# Save snapshots: after the game saves, a copy of the save goes to profile/save-snapshots when the newest copy there is
+# older than save_snapshot_minutes; the newest save_snapshots are kept (0: none). Files that did not change are hard
+# links, so a snapshot takes little space. The Game tab of the menu restores one, imports a save from the save-import folder
+# next to totk.exe and exports the save to save-export. Defaults: 10 and 30.
+# save_snapshots = 10
+# save_snapshot_minutes = 30
 
 [cheats]
 # One line per cheat of the mods' cheat files, mods\<mod>\cheats\<build id>.txt (docs/cheats.md); the Cheats tab of

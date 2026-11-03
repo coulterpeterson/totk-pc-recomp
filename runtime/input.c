@@ -4,13 +4,17 @@
 // system's back end (input_wsys.h: input_win.c with Win32, input_sdl.c with SDL), which also owns the cursor capture.
 // Keys and their map: docs/controls.md.
 // The gamepad also rumbles (input_rumble) and, when it has a gyro and an accelerometer, feeds the six-axis sensor from a
-// thread of its own (input_motion_start). Every SDL call on the gamepad is made under `lock`.
+// thread of its own (input_motion_start); without them the device's own sensors do (an Android handheld such as the
+// AYN Thor, whose built-in controller reports none). Every SDL call on the gamepad is made under `lock`.
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <SDL3/SDL.h>
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
 
 #include "cfg.h"
 #include "host.h"
@@ -693,6 +697,99 @@ void input_motion_axes(const float a[3], const float g[3], double acc[3], double
     gyro[2] = g[1];
 }
 
+// ---- the device's own sensors, for a gamepad without any (motion thread only). SDL reports them in the axes of the
+// device's natural orientation, as Android does: x to the right, y toward the top edge, z out of the screen; acceleration
+// as the push against gravity in m/s^2 (lying flat: z = +9.81), the gyro in rad/s, counter-clockwise positive.
+static SDL_Sensor *dev_gyro, *dev_accel;
+static int dev_state;          // 0 not tried, 1 open, -1 none
+static int dev_rotation;       // the screen's rotation from the natural orientation, quarter turns (Surface.ROTATION_*)
+static uint64_t dev_rotation_ns;
+
+#ifdef __ANDROID__
+// Display.getRotation() of the game's activity; 0 when JNI fails.
+static int android_rotation(void) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    int r = 0;
+    if (!env || !act) return 0;
+    jclass ac = (*env)->GetObjectClass(env, act);
+    jmethodID gwm = (*env)->GetMethodID(env, ac, "getWindowManager", "()Landroid/view/WindowManager;");
+    jobject wm = gwm ? (*env)->CallObjectMethod(env, act, gwm) : NULL;
+    if (wm) {
+        jclass wc = (*env)->GetObjectClass(env, wm);
+        jmethodID gd = (*env)->GetMethodID(env, wc, "getDefaultDisplay", "()Landroid/view/Display;");
+        jobject d = gd ? (*env)->CallObjectMethod(env, wm, gd) : NULL;
+        if (d) {
+            jclass dc = (*env)->GetObjectClass(env, d);
+            jmethodID gr = (*env)->GetMethodID(env, dc, "getRotation", "()I");
+            if (gr) r = (*env)->CallIntMethod(env, d, gr);
+            (*env)->DeleteLocalRef(env, dc);
+            (*env)->DeleteLocalRef(env, d);
+        }
+        (*env)->DeleteLocalRef(env, wc);
+        (*env)->DeleteLocalRef(env, wm);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env), r = 0;
+    (*env)->DeleteLocalRef(env, ac);
+    (*env)->DeleteLocalRef(env, act);
+    return r & 3;
+}
+#else
+static int android_rotation(void) { return 0; }
+#endif
+
+static int device_sensors(void) {
+    if (dev_state) return dev_state > 0;
+    dev_state = -1;
+    if (!SDL_InitSubSystem(SDL_INIT_SENSOR)) return 0;
+    SDL_SetEventEnabled(SDL_EVENT_SENSOR_UPDATE, false);   // read with SDL_GetSensorData, no event per sample
+    int n = 0;
+    SDL_SensorID *ids = SDL_GetSensors(&n);
+    for (int i = 0; ids && i < n; i++) {
+        SDL_SensorType t = SDL_GetSensorTypeForID(ids[i]);
+        if (t == SDL_SENSOR_GYRO && !dev_gyro) dev_gyro = SDL_OpenSensor(ids[i]);
+        else if (t == SDL_SENSOR_ACCEL && !dev_accel) dev_accel = SDL_OpenSensor(ids[i]);
+    }
+    SDL_free(ids);
+    if (!dev_gyro || !dev_accel) {
+        if (dev_gyro) SDL_CloseSensor(dev_gyro);
+        if (dev_accel) SDL_CloseSensor(dev_accel);
+        dev_gyro = dev_accel = NULL;
+        rt_log("input: the device has no gyro and accelerometer either: the six-axis sensor reads a controller at rest");
+        return 0;
+    }
+    dev_rotation = android_rotation();
+    dev_state = 1;
+    rt_log("input: motion from the device's own sensors (%s, %s), the screen turned %d degrees from their axes",
+           SDL_GetSensorName(dev_gyro), SDL_GetSensorName(dev_accel), dev_rotation * 90);
+    return 1;
+}
+
+// The device's newest sample in SDL's gamepad axes (input_motion_axes): first into the screen's axes by its rotation
+// (Android's AccelerometerPlay sample: ROTATION_90 takes x = -y, y = x), then x right, y out of the face, z toward
+// the player. The rotation is read again every 2 s.
+static int device_sample(float a[3], float g[3]) {
+    if (!device_sensors()) return 0;
+    SDL_UpdateSensors();
+    float da[3], dg[3];
+    if (!SDL_GetSensorData(dev_accel, da, 3) || !SDL_GetSensorData(dev_gyro, dg, 3)) return 0;
+    uint64_t now = plat_now_ns();
+    if (now - dev_rotation_ns > 2000000000ull) dev_rotation_ns = now, dev_rotation = android_rotation();
+    const float *v[2] = {da, dg};
+    float *out[2] = {a, g};
+    for (int k = 0; k < 2; k++) {
+        float x = v[k][0], y = v[k][1], sx, sy;
+        switch (dev_rotation) {
+        case 1: sx = -y, sy = x; break;
+        case 2: sx = -x, sy = -y; break;
+        case 3: sx = y, sy = -x; break;
+        default: sx = x, sy = y; break;
+        }
+        out[k][0] = sx, out[k][1] = v[k][2], out[k][2] = -sy;
+    }
+    return 1;
+}
+
 // Under lock: (re)enable the sensors when the open gamepad changed; 1 if it has both and they are on.
 static int sensors_ready(void) {
     SDL_JoystickID id = SDL_GetGamepadID(pad);
@@ -706,8 +803,7 @@ static int sensors_ready(void) {
     if (sensor_ok) rt_log("input: motion sensors on (gyro %.0f Hz, accelerometer %.0f Hz)",
                           (double)SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_GYRO),
                           (double)SDL_GetGamepadSensorDataRate(pad, SDL_SENSOR_ACCEL));
-    else rt_log("input: \"%s\" has no gyro and accelerometer: the six-axis sensor reads a controller at rest",
-                SDL_GetGamepadName(pad));
+    else rt_log("input: \"%s\" has no gyro and accelerometer", SDL_GetGamepadName(pad));
     return sensor_ok;
 }
 
@@ -723,24 +819,32 @@ int input_motion_enabled(void) {
 }
 
 // 250 Hz: the gamepads update (reports read, rumble expiry) and the newest gyro and accelerometer sample goes into the
-// fusion. Without a gamepad with sensors, or with motion off (TOTK_MOTION=0, live), nothing is fed and the six-axis
-// sensor reads at rest.
+// fusion: the gamepad's, else the device's own (device_sample). Without either, or with motion off (TOTK_MOTION=0,
+// live), nothing is fed and the six-axis sensor reads at rest.
 static void motion_main(void *arg) {
     (void)arg;
     for (;;) {
         plat_wait_ns(4000000);
         float a[3], g[3];
-        int have = 0;
+        int have = 0, pad_sensors = 0;
         plat_mutex_lock(&lock);
         if (pad && SDL_GamepadConnected(pad)) {
             SDL_UpdateGamepads();
-            have = sensors_ready() && SDL_GetGamepadSensorData(pad, SDL_SENSOR_ACCEL, a, 3) &&
+            pad_sensors = sensors_ready();
+            have = pad_sensors && SDL_GetGamepadSensorData(pad, SDL_SENSOR_ACCEL, a, 3) &&
                    SDL_GetGamepadSensorData(pad, SDL_SENSOR_GYRO, g, 3);
         }
         plat_mutex_unlock(&lock);
-        if (!have || !input_motion_enabled()) continue;
+        if (!input_motion_enabled()) continue;
+        if (!pad_sensors) have = device_sample(a, g);
+        if (!have) continue;
         double acc[3], gyro[3];
         input_motion_axes(a, g, acc, gyro);
+        static int told;
+        if (!pad_sensors && !told && acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2] > 0.25 && ++told)
+            rt_log(   // the first sample with gravity in it; lying flat, face up: about (0, 0, -1)
+                   "input: the device's sensors read gravity (%.2f, %.2f, %.2f) G in the controller's axes", acc[0],
+                   acc[1], acc[2]);
         motion_feed(motion_global(), acc, gyro, kern_now_ns());
     }
 }

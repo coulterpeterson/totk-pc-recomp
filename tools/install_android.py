@@ -152,6 +152,9 @@ def main():
     push(args.serial, extracted / 'romfs' / 'romfs.bin', f'{data}/romfs/romfs.bin')
     push(args.serial, out / 'romfs-index.bin', f'{data}/romfs-index.bin')
     push(args.serial, ROOT / 'build' / 'xlate-android' / 'totk_xlate.id', f'{HOME}/totk_xlate.id')
+    for seed in ('seed-answers.bin', 'seed-programs.bin'):   # tools/prepare_shaders.py --no-run: the shaders the game
+        if (out / seed).is_file():                            # prepares in the background (TOTK_SHADER_PREPARE)
+            push(args.serial, out / seed, f'{data}/{seed}')
     for overlay in sorted(out.glob('romfs-patches*')):   # beside romfs-index.bin, where romfs.c looks for them
         for f in sorted(p for p in overlay.rglob('*') if p.is_file()):
             push(args.serial, f, f'{data}/{f.relative_to(out).as_posix()}')
