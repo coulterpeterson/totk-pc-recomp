@@ -24,7 +24,7 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
   1.4.2 among them, are not supported: each version needs its own table of code patches.
 - **Speed on the AYN Thor Max:** 44-48 fps outdoors in performance mode at the 60 fps cap (about 40 when the device runs
   hot) and 30 fps in standard mode, at correct game speed, with the Mesa Turnip driver. In alternating four-minute runs
-  1.4.3 averaged 46.3 fps and 1.0.0 44.0; 1.0.0 with native execution 46.3. Qualcomm's own driver draws black tiles over moving characters outdoors.
+  1.4.3 averaged 46.3 fps and 1.0.0 44.0; 1.0.0 with native execution 46.3, and 1.4.3 native matches 1.4.3 lifted. Qualcomm's own driver draws black tiles over moving characters outdoors.
 - **Stability:** a 30-minute session outdoors on a real save ran without a stop. Expect visual bugs; the first minutes
   stutter while shaders are translated on the device and cached.
 

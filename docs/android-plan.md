@@ -191,7 +191,10 @@ Done, and how it was checked:
   six: about 20 of the 21-23 ms frame is the graphics pipeline, which leaves game code a small share either way. The
   native rewrite of 1.4.3 (`tools/native/rewrite.py --version v143 --verify`) passes the structure checker and the
   Unicorn equivalence check (68,968 sites, 0 divergent, every mutation caught), but nine of its patch sets, the
-  real-time step among them, have sites of several words, which the native build cannot hold yet.
+  real-time step among them, have sites of several words, which the native build could not hold then. It can now
+  (blocks behind the patch area, `tools/native/veneers.py`; [native-execution.md](native-execution.md) milestone 5):
+  1.4.3 native plays at 46.9 / 46.6 fps against 45.2 / 47.6 lifted in alternating runs, even, since the graphics
+  pipeline bounds the frame.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game

@@ -1,7 +1,7 @@
 # Native-execution rewriter
 
 Rewrites the game's modules so its own ARM64 code can run on an AArch64 Android host
-([docs/native-execution.md](../../docs/native-execution.md)). `rewrite.py` is ours; the rest is MacNativeGames' copy of
+([docs/native-execution.md](../../docs/native-execution.md)). `rewrite.py` and `veneers.py` are ours; the rest is MacNativeGames' copy of
 d2r-mobile's rewriter and verifiers (MIT, `LICENSE`), at MacNativeGames `b75be8cfa704df3701e86130c8ced268e79d6b11`
 (`games/totk/third_party/d2r/`), which carries its own TotK changes over d2r-mobile `9f0c257` (its `README.md`).
 
@@ -12,7 +12,9 @@ d2r-mobile's rewriter and verifiers (MIT, `LICENSE`), at MacNativeGames `b75be8c
 Output in `build/<version>-native/`: per module the patched image (`<m>.patched.bin`: image, bss, a 16 KiB key page,
 then the patch area), `fixups.tsv`, `gates.tsv`, `sites.tsv`; `layout.json` / `layout.h` with each module given room
 for its patch area; `patchsites.tsv`, the patch sets' one-word sites, which the loader writes into the code while their
-set is on (`runtime/native.c` `native_patches_sync`).
+set is on (`runtime/native.c` `native_patches_sync`). A patch site of several words (the real-time step's and the hair
+and cloth clock's veneers) becomes a block appended to `main.patched.bin` behind the patch area, and its one word a
+branch there (`veneers.py`); every block is run in Unicorn against its replacement words before the output is written.
 
 Changes for Android, each marked "Android" in the code:
 - Slot base. The Apple rewrite reaches its per-thread slots (guest x18, TPIDR_EL0, TPIDRRO_EL0, the gate address)

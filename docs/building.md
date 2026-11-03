@@ -326,6 +326,9 @@ adb shell mkdir -p /storage/emulated/0/Android/data/com.totkrecomp/files/native
 adb push build/v0-native/*.patched.bin build/v0-native/*.tsv /storage/emulated/0/Android/data/com.totkrecomp/files/native/
 ```
 
+For another version in its own folder (`--version-folder` above) the images go into that folder's `native/`, which the
+loader reads beside the version's `exefs/`; for 1.4.3, `build/v143-native` into `files/v143/native/`.
+
 Diagnostics for GPU work (`[diagnostics]` in `totk.ini`): `trace = gpu` logs GPU time per pass every 120 frames
 (`vk_gpuprof.c`: a timestamp at every full barrier, the table keyed by each pass's targets), one frame in 1200 segment
 by segment with every draw timed on its own, and the game's barriers by their NVN bits. `trace = perf` adds, per draw,

@@ -147,6 +147,7 @@ void native_add_code(uint64_t lo, uint64_t hi);            // loader: guest code
 int native_guest_pc(uint64_t pc);                          // pc in guest code
 void native_add_patch(int set, uint64_t addr, uint32_t orig, uint32_t repl, int page_reg);   // loader: a patch site
 void native_patches_sync(const uint8_t *on, int nsets, uint64_t page);   // patches.c: the sites' words for the sets on
+void native_page_gates(uint64_t page);                     // patches.c: slots for host functions on the patch page
 
 // ---- guest memory (memory.c)
 typedef struct { uint64_t base, size; } RtRange;

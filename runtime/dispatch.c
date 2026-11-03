@@ -176,6 +176,8 @@ void rt_dispatch_init(const RtModule *mods, int count) {
     __atomic_store_n(&g_ready, true, __ATOMIC_RELEASE);
 }
 
+int rt_host_registered(uint64_t addr) { return host_lookup(addr) != NULL; }
+
 GuestFn rt_dispatch_lookup(uint64_t pc) {
     uint64_t i = __builtin_rotateright64(pc - D.lo, 2);   // a misaligned pc lands far above D.slots
     if (i < D.slots && D.slot[i]) return (GuestFn)(D.anchor + D.slot[i]);

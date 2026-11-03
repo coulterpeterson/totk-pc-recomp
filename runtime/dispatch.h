@@ -36,6 +36,8 @@ void rt_dispatch_init(const RtModule *mods, int count);
 
 // The host function for a guest address, or NULL when nothing is there. Does not run guest code.
 GuestFn rt_dispatch_lookup(uint64_t pc);
+// Whether a host function is registered at addr; also before rt_dispatch_init (native.c native_page_gates).
+int rt_host_registered(uint64_t addr);
 
 // "0x7000001234 (main+0x1234)" for a guest address inside a module, else the bare address. Returns buf.
 const char *rt_guest_name(uint64_t pc, char *buf, int size);

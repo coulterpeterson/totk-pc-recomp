@@ -153,6 +153,30 @@ must check the slot is still empty when it creates each guest thread.
      scale. The replay's walk then went from 8.6 to 6.9 ms (36 fps), and the fence write-back now reads copies
      recorded with the work that renders those targets (40 fps; [android-plan.md](android-plan.md)).
 
+5. **1.4.3 and patch sites of several words** (done, 2026-11-03).
+   - `tools/native/rewrite.py --version v143 --verify`: 1.4.3 has the same three modules; the structure checker passes
+     and the equivalence checker runs 68,968 sites with 0 divergent and every mutation caught, with no change to the
+     rewriter.
+   - The loader switches one word per site, so a replacement of several words (22 sites in 1.4.3: the real-time step,
+     the hair and cloth clock, the bounce and fade fixes, output size, shadows, aspect, field of view; 7 in 1.0.0: its
+     hair and cloth clock) was left out. `tools/native/veneers.py` now writes each as a block behind main's patch area:
+     `@page` re-encoded as an adrp from the block, a last bl aimed at the same target, a branch back to the site's next
+     word; the site's word becomes a branch to the block. Each block runs in Unicorn against a reference that loads the
+     page with movz/movk and stops at the bl (its target read by capstone from the original word), 24 random states
+     each, and capstone confirms every branch back. Wrong branch-backs, adrps a page off, swapped operands and a bl to
+     the next function were all caught.
+   - 1.4.3's zstd set calls host functions on the patch page itself (`runtime/ov_zstd.c`); lifted code reaches them
+     through `rt_dispatch`, native code branched to a page without code and crashed right after `nnMain`.
+     `native.c` `native_page_gates` writes the host-function window's slot at each one and makes the page executable
+     (it stays writable for the frame step).
+   - On the Thor, 1.4.3 native boots, loads the save 1.0.0 wrote and plays with every patch set the profile turns on
+     (49 patch site words, 31 written; 16,384 zstd frames decoded on the host in four minutes); 1.0.0 native with its
+     hair and cloth blocks played 4 minutes at 47.9 fps, speed 1.000.
+   - 1.4.3 native against lifted, four alternating four-minute runs at the 60 cap (performance mode, battery 28 C):
+     native 46.9 and 46.6 fps, lifted 45.2 and 47.6, speed 1.000 in all; walk 6.2-6.5 ms and GPU after the last part
+     12.8-13.3 ms in every run. Even, as on 1.0.0: the frame is bound by the graphics pipeline, so native execution's
+     15-25% less game-thread CPU does not show in the frame rate yet.
+
 ## What to expect
 
 - Speed: game code at native speed is about a third of today's 22-23 ms on the critical path, but the runtime part

@@ -54,6 +54,7 @@ void rt_patches_init(void) {
     }
     rt_log("patches: %s (page %#llx)", list, RT_PATCH_PAGE);
 #ifdef RT_NATIVE
+    native_page_gates(RT_PATCH_PAGE);   // before the sites that call them are written
     native_patches_sync(rt_patch_on, RT_PATCH_COUNT, RT_PATCH_PAGE);   // native code holds the sites' words itself
 #endif
 #endif

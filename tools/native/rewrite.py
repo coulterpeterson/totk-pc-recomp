@@ -23,6 +23,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'recomp'))
 from layout import FIRST_BASES, layout, write  # noqa: E402
 import patches  # noqa: E402
+sys.path.insert(0, str(HERE))
+import veneers  # noqa: E402
 
 MODULES = ('main', 'subsdk0', 'sdk')
 KERNEL_OFFSET = 0x10000000   # runtime/host.h RT_KERNEL_BASE: the guest kernel region starts this far above the modules
@@ -64,19 +66,6 @@ def main():
     table = patches.load(ROOT / 'recomp' / f'patches-{a.version}.txt', layout(exefs, 'android'))
     spins = out / 'spins.tsv'
     spins.write_text(''.join(f'{m} {b:x} {h:x}\n' for m, edges in table.spins.items() for b, h in sorted(edges.items())))
-    # The loader sets one word per site; a set with a longer replacement anywhere (an inlined veneer: the hair and
-    # cloth clock) stays out whole, so no set half-applies. Its switch then does nothing in the native build.
-    lifted_only = {k for sites in table.sites.values() for alts in sites.values() for k, repl, _ in alts if len(repl) != 1}
-    for k in sorted(lifted_only):
-        print(f'set {table.sets[k][0]}: sites of several words, lifted code only')
-    rows = []
-    for m, sites in table.sites.items():
-        for off, alts in sorted(sites.items()):
-            for k, repl, orig in alts:
-                if k in lifted_only:
-                    continue
-                w = repl[0]
-                rows.append(f'{k}\t{m}\t{off:x}\t{orig:08x}\t' + (f'page:x{w[1]}' if isinstance(w, tuple) else f'{w:08x}'))
     env = dict(os.environ, DM_RULESET='native', DM_PRIVATE_GATES='0', DM_SPINS=str(spins))
     py = sys.executable
 
@@ -89,15 +78,41 @@ def main():
 
     for m in MODULES:   # a patch site must still hold its original word: the rewrite may not have moved it
         rewritten = {int(l.split()[0], 16) for l in (out / f'{m}.sites.tsv').read_text().splitlines() if l.split()[1] != 'J'}
-        clash = sorted(off for off, alts in table.sites.get(m, {}).items()
-                       if off in rewritten and any(k not in lifted_only for k, _, _ in alts))
+        clash = sorted(off for off in table.sites.get(m, {}) if off in rewritten)
         if clash:
             raise SystemExit(f'{m}: patch sites {[hex(x) for x in clash]} are rewrite sites')
+
+    # The loader sets one word per site: a replacement of several words becomes a block behind main's patch area and
+    # the site's word a branch to it (veneers.py). Main comes first in the layout, at FIRST_BASES['android'].
+    rows, blocks = [], []
+    for m, sites in table.sites.items():
+        multi = [(k, off, orig, repl) for off, alts in sorted(sites.items()) for k, repl, orig in alts if len(repl) != 1]
+        branch = {}
+        if multi:
+            if m != 'main':
+                raise SystemExit(f'{m}: patch sites of several words outside main; veneers.py places blocks in main')
+            img = out / f'{m}.patched.bin'
+            data = img.read_bytes()
+            code, branch, bl = veneers.build(multi, FIRST_BASES['android'], len(data), table.page)
+            img.write_bytes(data + code)
+            blocks += bl
+            print(f'{m}: {len(multi)} patch sites of several words as blocks of {len(code)} bytes behind the patch area')
+        for off, alts in sorted(sites.items()):
+            for k, repl, orig in alts:
+                w = branch.get((k, off), repl[0])
+                rows.append(f'{k}\t{m}\t{off:x}\t{orig:08x}\t' + (f'page:x{w[1]}' if isinstance(w, tuple) else f'{w:08x}'))
+    if blocks:
+        bad = veneers.check(blocks, table.page)
+        if bad:
+            raise SystemExit(f'veneers: {bad} trials differ from the replacement words (above)')
+        print(f'veneers: {len(blocks)} blocks match their replacement words in Unicorn')
     (out / 'patchsites.tsv').write_text(
         f'# set\tmodule\toffset\toriginal\treplacement (page:x<n> = adrp x<n>, the patch page)\n' +
         ''.join(r + '\n' for r in rows))
     sizes = {m: (out / f'{m}.patched.bin').stat().st_size for m in MODULES}
     mods = layout(exefs, 'android', sizes)
+    if blocks and (mods[0][0], mods[0][1]) != ('main', FIRST_BASES['android']):
+        raise SystemExit('veneers.py placed its blocks for main at the first base, where the layout does not put it')
     end = max(b + s for _, b, s in mods)
     if end > FIRST_BASES['android'] + KERNEL_OFFSET:
         raise SystemExit(f'modules end at {end:#x}, inside the kernel region (runtime/host.h RT_KERNEL_BASE)')

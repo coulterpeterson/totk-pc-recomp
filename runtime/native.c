@@ -177,6 +177,29 @@ static void far_jump(uint32_t *at, void (*target)(void)) {   // ldr x16, 8 ; br 
     memcpy(&at[2], &(uint64_t){(uint64_t)(uintptr_t)target}, 8);
 }
 
+// Host functions that a patch set calls on the patch page itself (ov_zstd.c: page +0xfe0 and +0xff0, patches-v143.txt
+// set zstd): lifted code reaches them through rt_dispatch, native code branches there. Each gets the window's slot
+// ("adr x17, . ; b" to a far jump into native_hostfn_gate at +0xf00, below them), and the page becomes executable while
+// it stays writable for the frame step it also holds (frame_rate.c step_store, +0..15).
+void native_page_gates(uint64_t page) {
+    uint32_t *w = (uint32_t *)(uintptr_t)page;
+    int n = 0;
+    for (uint64_t a = page + 0xf10; a < page + 0x1000; a += 16) {
+        if (!rt_host_registered(a)) continue;   // rt_patches_init runs before hostfn_seal
+        uint32_t *s = &w[(a - page) / 4];
+        s[0] = 0x10000011u;   // adr x17, .
+        s[1] = branch(a + 4, page + 0xf00);
+        s[2] = s[3] = 0xD4200000u;   // brk #0
+        n++;
+    }
+    if (!n) return;
+    far_jump(&w[0xf00 / 4], native_hostfn_gate);
+    __builtin___clear_cache((char *)w, (char *)w + 0x1000);
+    if (mprotect(w, 0x1000, PROT_READ | PROT_WRITE | PROT_EXEC))
+        rt_fatal("native: cannot make the patch page executable for its %d host functions", n);
+    rt_log("native: %d host functions on the patch page", n);
+}
+
 void native_init(void) {
     static int done;
     if (done) return;
