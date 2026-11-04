@@ -2,8 +2,8 @@
 
 This fork builds [TotK Recomp](https://github.com/valentderah/totk-pc-recomp), the static recompilation of *The Legend
 of Zelda: Tears of the Kingdom*, into an APK for arm64 Android handhelds. Its target is the AYN Thor Max (Snapdragon 8
-Gen 2, Adreno 740, Android 13), where it plays at 40-48 fps in performance mode. Upstream closed Android as out of
-scope, so the work lives here. It builds on the aarch64 groundwork of
+Gen 2, Adreno 740, Android 13), where it plays at about 46 fps outdoors in performance mode and in the mid-30s in
+heavier areas. Upstream closed Android as out of scope, so the work lives here. It builds on the aarch64 groundwork of
 [Astrr00/totk-pc-recomp-android](https://github.com/Astrr00/totk-pc-recomp-android).
 
 > [!IMPORTANT]
@@ -24,14 +24,18 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
   1.4.2 among them, are not supported: each version needs its own table of code patches.
 - **Speed on the AYN Thor Max:** 44-48 fps outdoors in performance mode at the 60 fps cap (about 40 when the device runs
   hot) and 30 fps in standard mode, at correct game speed, with the Mesa Turnip driver. In alternating four-minute runs
-  1.4.3 averaged 46.3 fps and 1.0.0 44.0; 1.0.0 with native execution 46.3, and 1.4.3 native matches 1.4.3 lifted. Qualcomm's own driver draws black tiles over moving characters outdoors.
-- **Stability:** a 30-minute session outdoors on a real save ran without a stop. Expect visual bugs; the first minutes
-  stutter while shaders are translated on the device and cached.
+  1.4.3 averaged 46.3 fps and 1.0.0 44.0; 1.0.0 with native execution 46.3, and 1.4.3 native matches 1.4.3 lifted. A
+  heavier area of another save ran at 35-37 fps. Qualcomm's own driver draws black tiles over moving characters outdoors.
+- **Stability:** a 30-minute session outdoors on a real save ran without a stop on native 1.4.3. Expect visual bugs.
+- **Shaders:** on first play the device translates them in the background, with a progress bar: 12-13 minutes for 1.4.3
+  on the Thor, and a run that stops halfway goes on at the next start. A place the game reaches before its shaders are
+  ready can still stutter.
 
 ## Features
 
 - The game's own ARM64 code lifted to C and compiled for Android by the NDK; nothing is compiled on the device
-- Handheld mode at the game's own 1280x720, scaled to the screen by the present (bilinear or AMD FSR 1)
+- Handheld mode at the game's own 1280x720, scaled to the screen by AMD FSR 1. The menu's Screen tab switches to
+  bilinear live, which on the Thor gives about 3 fps more for a softer picture
 - Frame rate limit of 30, 60 (the default) or uncapped, with game time following the clock: a frame that misses its
   slot shows late but does not slow the game down
 - Ports of the real-time fixes to 1.0.0: the equipment-switch cooldown and the hair and cloth clock
@@ -42,12 +46,15 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
 - The game pauses while the app is in the background, as on the Switch's Home screen
 - Save import, export and snapshots from the menu's Game tab: pick an Eden, Ryujinx or JKSV/Checkpoint save in the file
   browser, zipped or not, export to `files/save-export`, and keep up to 50 automatic snapshots to go back to
-- Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none, with **Calibrate motion** in the Controls tab for a device whose axes come out wrong
+- Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none, with
+  **Calibrate motion** in the Controls tab for a device whose axes come out wrong. Its solver passes a test of every
+  axis layout, but so far it has only been run on the Thor, which needs no correction
 - Shaders prepared in the background on first play, with a progress bar, so new places do not stutter later
 - Mods and Atmosphère cheats as upstream, from the app's data folder (`files/mods`)
 - The game's own launcher icon, taken from your dump
 - Native execution, which runs the game's own ARM64 code instead of the lifted C, for 1.0.0 and 1.4.3
-  ([docs/native-execution.md](docs/native-execution.md)): the same frame rate on the Thor for about 10% less power
+  ([docs/native-execution.md](docs/native-execution.md)): the same frame rate on the Thor for about 10% less power, with
+  crash reports for faults in the game's code
 
 ## How it got to 46 fps
 
@@ -62,7 +69,8 @@ runs of the same save; the full record is [docs/android-plan.md](docs/android-pl
 | Performance mode (the X3 core at 3.19 GHz, the GPU up to 680 MHz) with the real-time step | 35 fps |
 | A shorter replay walk: the recorder spins before sleeping, RCpc acquire loads (LDAPR), cached snapshot lookups | 36 fps |
 | The fence write-back recorded as copies at the end of each submission instead of a GPU round trip per target | 40 fps |
-| Asynchronous replay: from 20-500 frames a minute over 25 ms to 2-5, at about 46 fps (50 with the bilinear present) | 46 fps |
+| The Android cap raised from 40 to 60, run on a cool device. The 40-41 fps uncapped runs were at 88-91 °C, so much of this step is probably temperature rather than code | 44-48 fps |
+| Asynchronous replay: no faster on average, but frames over 25 ms fall from 20-500 a minute to 2-5, for up to one frame more input lag | 46 fps |
 
 What else had to change for the game to run on Android at all:
 
@@ -91,7 +99,8 @@ You need:
 - **Docker** with arm64 Linux containers, for the shader translator.
 - **[uv](https://docs.astral.sh/uv/)** for the two Python environments.
 - **About 40 GB free:** the RomFS alone is 17 GB.
-- **Your own game files,** dumped from your own console: the base game NSP and the keys file of the console.
+- **Your own game files,** dumped from your own console: the base game NSP and the keys file of the console, plus the
+  1.4.3 update NSP for step 7.
 
 1. Python environments:
 
@@ -139,13 +148,15 @@ You need:
    ```
 
 7. Optional, and what the AYN Thor runs day to day: the native-execution build, for about 10% less power at the same
-   frame rate. It uses the lifted build's data and needs step 4's seed. 1.4.3 is shown; `--version-folder` keeps its data
-   beside another version's:
+   frame rate. It uses the data of that version's lifted build, so 1.4.3, shown here, gets its own lifted build and
+   shader seed; the installer skips a missing seed without a word, and the game then prepares no shaders ahead.
+   `--version-folder` keeps the data beside another version's:
 
    ```sh
    .venv/bin/python recomp/gen.py --exefs build/extracted/v143/exefs --out generated/v143-android --target android --patches recomp/patches-v143.txt
    .venv/bin/python tools/native/rewrite.py --version v143 --verify
    .venv/bin/python tools/build_game.py --version v143 --gen generated/v143-android --target android
+   .venv-py314/bin/python tools/prepare_shaders.py build/v143-android --version v143 --no-run --romfs build/extracted/v143/romfs --exefs build/extracted/v143/exefs
    .venv/bin/python tools/build_game.py --version v143 --gen generated/v143-android --target android --native build/v143-native
    .venv/bin/python tools/build_apk.py --version v143 --out build/v143-android-native
    .venv/bin/python tools/install_android.py --version v143 --native --version-folder
