@@ -277,10 +277,13 @@ static const ProfileKey DECK[] = {
 // about 40, and with the real-time step a slower frame slows nothing down); fifo, the present mode every Android driver
 // has; the game pauses while the app is in the background, as on the Switch's Home screen; timestamp reports stamped
 // when the replay records them (vk_exec_xfer.c gpu_time_at_record); the shader seed beside the game data translated in
-// the background while the game runs, as nothing translated them before (gfx_shader.c gfx_shader_prepare_background).
+// the background while the game runs, as nothing translated them before (gfx_shader.c gfx_shader_prepare_background);
+// asynchronous replay: on the AYN Thor the walk on the game's submitting thread left 20 to 500 frames a minute over
+// 25 ms, and on its own thread 2 to 5, at about the same mean (the game runs up to a frame ahead of the screen).
 static const ProfileKey ANDROID[] = {
     {"FULLSCREEN", "1"}, {"OPERATION_MODE", "handheld"}, {"FPS_LIMIT", "60"},
     {"VK_PRESENT", "fifo"}, {"ASSUME_FOCUS", "0"}, {"GPU_TIME", "record"}, {"SHADER_PREPARE", "1"},
+    {"REPLAY_ASYNC", "1"},
 };
 static const struct { const char *name; const ProfileKey *keys; size_t count; } PROFILES[] = {
     {"desktop", NULL, 0}, {"deck", DECK, sizeof DECK / sizeof *DECK}, {"android", ANDROID, sizeof ANDROID / sizeof *ANDROID},

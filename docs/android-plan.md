@@ -215,6 +215,16 @@ Done, and how it was checked:
   memcpy then moved a map of zeros. `vk_texture.c` now looks only at units wholly inside a texture and compares the bytes
   of one that fills none (`own_units`, `storage_rewritten`). With a first version of this (64 KiB fixed) no write-back was skipped
   and the grass stayed in all six runs. 1.4.3 native also passes the weapon switch script.
+- More speed from the graphics side (2026-11-04; native 1.4.3, performance mode, three alternating runs each at the 60
+  cap, mean fps, 1% low, frames a minute over 25 ms). Today's frame: 45.8 fps, 28-40, 20-513. Asynchronous replay: 46.6,
+  41, 2-5: the same mean and no more erratic runs, so it is on in the Android profile. With the bilinear present instead
+  of FSR as well: 49.7, 44.4, 0, as the present's GPU time falls from 1.8 to 0.4 ms; without sharpening alone: 47.3, 41,
+  4-25. What did not help: the pass-boundary barriers (today's against none at all: 45.2 / 46.9 fps, walk and GPU time
+  the same), a 75% render scale (41 fps, slower: it goes through the game's own upscale), and handing the GPU the frame
+  sooner: at once it takes 19.0 ms by itself against 19.5 ms from submit to done in parts, so only 0.5 ms of idle GPU is
+  left for translating the big recording when it ends, where the walk's trimming took the 3.5 ms measured before.
+  On the final build with asynchronous replay on, the grass stayed in four of four runs, the weapon switch script passed
+  and a 30-minute session on the benchmark save ran without a stop at 45.9 fps, speed 1.000.
 - Import save opens the system's file browser (`MainActivity.java`): zip or folder, copied to `save-import-picked/`
   and staged as before. Tried on the Thor with the player's Eden zip through to a load at the next start, and with an
   unzipped folder through the folder permission prompt to staging.
@@ -228,7 +238,7 @@ Open, in order:
    frame pacing from display timing, barriers and state churn on the GPU.
 2. The replay (6.9 ms walk of one 770 KiB handle a frame since 2026-11-03, from 8.6): what is left of its CPU time is
    spread over lookups that miss the cache (texture descriptors, programs' control blocks, pipeline binding lists).
-   Translating the frame's big recording when it ends could save at most the GPU's idle time behind the walk.
+   Translating the frame's big recording when it ends could save only about 0.5 ms now (measured 2026-11-04).
 3. GPU (19.3 ms, half of it the G-buffer's per-draw cost; section above): narrower barriers and less descriptor and
    dynamic-state churn (each worth a few tenths of a millisecond), render scale. Compression (UBWC) and load/store
    ops matter little while the frame is bound by draws rather than bandwidth.

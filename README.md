@@ -49,7 +49,7 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
 - Native execution, which runs the game's own ARM64 code instead of the lifted C, for 1.0.0 and 1.4.3
   ([docs/native-execution.md](docs/native-execution.md)): the same frame rate on the Thor for about 10% less power
 
-## How it got to 40 fps
+## How it got to 46 fps
 
 The first outdoor frames on the Thor ran at 20 fps. Each step below was measured on the device, mostly in four-minute
 runs of the same save; the full record is [docs/android-plan.md](docs/android-plan.md).
@@ -62,6 +62,7 @@ runs of the same save; the full record is [docs/android-plan.md](docs/android-pl
 | Performance mode (the X3 core at 3.19 GHz, the GPU up to 680 MHz) with the real-time step | 35 fps |
 | A shorter replay walk: the recorder spins before sleeping, RCpc acquire loads (LDAPR), cached snapshot lookups | 36 fps |
 | The fence write-back recorded as copies at the end of each submission instead of a GPU round trip per target | 40 fps |
+| Asynchronous replay: from 20-500 frames a minute over 25 ms to 2-5, at about 46 fps (50 with the bilinear present) | 46 fps |
 
 What else had to change for the game to run on Android at all:
 
