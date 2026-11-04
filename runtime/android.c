@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <android/log.h>
+#include <jni.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -148,6 +149,32 @@ static void find_gpu_driver(const char *home) {
     }
     setenv("TOTK_VK_DRIVER", dst, 0);
     __android_log_print(ANDROID_LOG_INFO, "totk", "GPU driver %s (copied from %s)", dst, src);
+}
+
+// Import save in the menu (MainActivity.java pickSave): the file browser, and how far the copy of its choice is.
+void android_pick_save(const char *title, const char *zip, const char *folder) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!env || !act) return;
+    jclass c = (*env)->GetObjectClass(env, act);
+    jmethodID m = (*env)->GetMethodID(env, c, "pickSave", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+    jstring t = (*env)->NewStringUTF(env, title), z = (*env)->NewStringUTF(env, zip), f = (*env)->NewStringUTF(env, folder);
+    if (m) (*env)->CallVoidMethod(env, act, m, t, z, f);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, t), (*env)->DeleteLocalRef(env, z), (*env)->DeleteLocalRef(env, f);
+    (*env)->DeleteLocalRef(env, c), (*env)->DeleteLocalRef(env, act);
+}
+
+int android_pick_save_state(void) {   // 0 idle, 1 choosing or copying, 2 copied, -1 failed; 2 and -1 are told once
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!env || !act) return 0;
+    jclass c = (*env)->GetObjectClass(env, act);
+    jmethodID m = (*env)->GetMethodID(env, c, "pickSaveState", "()I");
+    int s = m ? (*env)->CallIntMethod(env, act, m) : 0;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env), s = 0;
+    (*env)->DeleteLocalRef(env, c), (*env)->DeleteLocalRef(env, act);
+    return s;
 }
 
 int SDL_main(int argc, char **argv) {

@@ -767,12 +767,25 @@ static int device_sensors(void) {
 
 // The device's newest sample in SDL's gamepad axes (input_motion_axes): first into the screen's axes by its rotation
 // (Android's AccelerometerPlay sample: ROTATION_90 takes x = -y, y = x), then x right, y out of the face, z toward
-// the player. The rotation is read again every 2 s.
+// the player. The rotation is read again every 2 s. No sample before the sensors deliver one: the fusion starts its
+// orientation from the first sample, and a zero one reads as lying flat.
+//
+// A phone's accelerometer can read far off 1 G at rest (the AYN Thor's about 1.17 G in the hand, 1.12 G lying flat), and
+// the fusion takes gravity from it only within 15 % of 1 G (motion_fusion.c integrate): without a correction it never
+// learned the device was upright, so the game took a turn for a roll. So the length is scaled to 1 G, by the mean length
+// measured while the gyro says the device is still.
 static int device_sample(float a[3], float g[3]) {
     if (!device_sensors()) return 0;
     SDL_UpdateSensors();
     float da[3], dg[3];
     if (!SDL_GetSensorData(dev_accel, da, 3) || !SDL_GetSensorData(dev_gyro, dg, 3)) return 0;
+    float len = sqrtf(da[0] * da[0] + da[1] * da[1] + da[2] * da[2]);
+    if (len < 1) return 0;
+    static float rest;
+    float rate = sqrtf(dg[0] * dg[0] + dg[1] * dg[1] + dg[2] * dg[2]);
+    if (len > 7 && len < 14 && (!rest || rate < 0.1f)) rest = rest ? rest * 0.98f + len * 0.02f : len;
+    if (rest)
+        for (int i = 0; i < 3; i++) da[i] *= SDL_STANDARD_GRAVITY / rest;
     uint64_t now = plat_now_ns();
     if (now - dev_rotation_ns > 2000000000ull) dev_rotation_ns = now, dev_rotation = android_rotation();
     const float *v[2] = {da, dg};
@@ -841,11 +854,18 @@ static void motion_main(void *arg) {
         double acc[3], gyro[3];
         input_motion_axes(a, g, acc, gyro);
         static int told;
-        if (!pad_sensors && !told && acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2] > 0.25 && ++told)
-            rt_log(   // the first sample with gravity in it; lying flat, face up: about (0, 0, -1)
-                   "input: the device's sensors read gravity (%.2f, %.2f, %.2f) G in the controller's axes", acc[0],
+        if (!pad_sensors && !told && ++told)   // lying flat, face up: about (0, 0, -1)
+            rt_log("input: the device's sensors read gravity (%.2f, %.2f, %.2f) G in the controller's axes", acc[0],
                    acc[1], acc[2]);
-        motion_feed(motion_global(), acc, gyro, kern_now_ns());
+        uint64_t now = kern_now_ns();
+        motion_feed(motion_global(), acc, gyro, now);
+        static uint64_t fed;
+        if (!pad_sensors && ++fed == 2500) {   // 10 s on: the fusion's up should be against that gravity
+            MotionState st;
+            if (motion_read(motion_global(), &st, 1, now) == 1)
+                rt_log("input: 10 s on, gravity (%.2f, %.2f, %.2f) G, the fusion's up (%.2f, %.2f, %.2f)", acc[0], acc[1],
+                       acc[2], st.dir[2], st.dir[5], st.dir[8]);
+        }
     }
 }
 

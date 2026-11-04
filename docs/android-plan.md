@@ -201,6 +201,16 @@ Done, and how it was checked:
   sensors and the shaders prepared in the background: the 46,671 seed variants of 1.4.3, 22,885 left to translate
   after earlier runs, in 449 s with one translator, 0 failed, the frame rate unchanged meanwhile. Saves import from
   `save-import/`, export to `save-export/` and keep snapshots (menu Game tab, `--probe-fs` covers all three).
+- Motion on the Thor, by hand (2026-11-04): up/down aimed diagonally and left/right hardly moved. The axes were right:
+  raw readings while the player tilted, turned and rolled the device put the driver's x up the screen, y to its left
+  and z out, as Android specifies for this rotation. The fusion was wrong about the pose. Its first sample was still
+  zero, which reads as lying flat, and the accelerometer reads 1.12-1.17 G at rest, outside the 15 % window in which
+  the fusion takes gravity from it, so it never learned the device was upright. `input.c` device_sample now waits for
+  a real sample and scales the length to 1 G by the mean measured while the gyro is still. Ten seconds in, the fusion's
+  up is (0.11, 0.17, 0.98) against gravity (-0.11, -0.17, -0.98).
+- Import save opens the system's file browser (`MainActivity.java`): zip or folder, copied to `save-import-picked/`
+  and staged as before. Tried on the Thor with the player's Eden zip through to a load at the next start, and with an
+  unzipped folder through the folder permission prompt to staging.
 
 Open, in order:
 1. Native execution runs (milestones 1-4 of [native-execution.md](native-execution.md)) and takes 15-25% off the game

@@ -288,11 +288,12 @@ the translation itself happens on the device. A bar at the top of the screen sho
 .venv-py314/bin/python tools/prepare_shaders.py build/v143-android --version v143 --no-run --romfs build/extracted/v143/romfs --exefs build/extracted/v143/exefs
 ```
 
-Saves: the menu's Game tab imports a save copied into `save-import/` of the data folder (Eden's `0100F2C0115B6000`
-folder, a JKSV or Checkpoint dump; it loads at the next start, and on 1.0.0 a newer game's version field is lowered to
-1.0.0's), exports the save to `save-export/` and keeps snapshots (`save_snapshots`, `save_snapshot_minutes`), any of
-which loads again at the next start. Motion controls read the device's own gyro and accelerometer when the controller
-reports none, as the Thor's built-in one does.
+Saves: Import save on the menu's Game tab opens the system's file browser for a zip file or an unzipped folder (Eden's
+export, a JKSV or Checkpoint dump, the save found at any folder depth). Android does not let an app take the top of its
+storage or the Download folder itself, so an unzipped save goes in a folder of its own. It loads at the next start, and
+on 1.0.0 a newer game's version field is lowered to 1.0.0's. The tab also exports the save to `save-export/` and keeps
+snapshots (`save_snapshots`, `save_snapshot_minutes`), any of which loads again at the next start. Motion controls read
+the device's own gyro and accelerometer when the controller reports none, as the Thor's built-in one does.
 
 ## Checks
 

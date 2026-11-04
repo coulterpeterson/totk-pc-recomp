@@ -56,6 +56,10 @@ void res_sizes(unsigned out[2], unsigned scene[2]);
 int res_is_16x9(unsigned w, unsigned h);
 int res_own_share_pct(void);
 int gfx_shader_prepare_progress(uint64_t *done, uint64_t *total);
+#ifdef __ANDROID__
+void android_pick_save(const char *title, const char *zip, const char *folder);
+int android_pick_save_state(void);
+#endif
 int rt_patch_set(const char *name);
 int vk_hdr_offered(void);
 double frame_step_limit_hz(void);
@@ -981,8 +985,10 @@ static void rows_save(void) {
     static char snaps[12][48];
     uint64_t now = plat_now_ns();
     if (!scanned_ns || now - scanned_ns > 1000000000ull) {
+#ifndef __ANDROID__   // Android picks with the file browser
         char src[1100];
         found = fs_save_import_find(src, sizeof src);
+#endif
         pending = fs_save_pending();
         nsnap = fs_save_snapshots(snaps, 12);
         scanned_ns = now;
@@ -996,6 +1002,24 @@ static void rows_save(void) {
         }
     }
     opt_group(UI_MENU_SAVE_IMPORT_GROUP);
+#ifdef __ANDROID__   // the system's file browser: a zip or a folder, copied by MainActivity.java
+    static bool picking;
+    if (picking) {
+        int st = android_pick_save_state();
+        if (st != 1) picking = false;
+        if (st == 2) action_done(import_note, fs_save_stage_picked() == 0);
+        else if (st == -1) action_done(import_note, false);
+        if (st != 1) scanned_ns = 0;
+    }
+    const char *import_value = picking ? menu_text(UI_MENU_SAVE_PICK_BUSY)
+                               : import_note.result < 0 && now < import_note.until ? menu_text(UI_MENU_SAVE_PICK_NONE)
+                                                                                   : action_value(import_note, UI_MENU_SAVE_STAGED);
+    if (opt_button("##save_import", UI_MENU_SAVE_IMPORT, UI_MENU_SAVE_PICK_DESC, import_value) && !picking) {
+        android_pick_save(menu_text(UI_MENU_SAVE_IMPORT), menu_text(UI_MENU_SAVE_PICK_ZIP),
+                          menu_text(UI_MENU_SAVE_PICK_FOLDER));
+        picking = true;
+    }
+#else
     opt_text(UI_MENU_SAVE_IMPORT_HELP);
     if (!found) opt_disable_next(UI_MENU_SAVE_IMPORT_NONE);
     if (opt_button("##save_import", UI_MENU_SAVE_IMPORT, UI_MENU_SAVE_IMPORT_DESC,
@@ -1003,6 +1027,7 @@ static void rows_save(void) {
         action_done(import_note, fs_save_import_stage() == 0);
         scanned_ns = 0;
     }
+#endif
     bool shown = export_note.result > 0 && now < export_note.until;
     if (opt_button("##save_export", UI_MENU_SAVE_EXPORT, UI_MENU_SAVE_EXPORT_DESC,
                    shown ? exported : action_value(export_note, UI_MENU_SAVE_EXPORT)))

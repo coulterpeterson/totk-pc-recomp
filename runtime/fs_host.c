@@ -573,6 +573,7 @@ static uint32_t save_commit(void) {
 // to load (an import, a snapshot to go back to) waits in save-import-pending and replaces the committed save at the
 // next start, before anything reads it (import_apply); the save it replaces is kept as a snapshot first.
 //   <home>/save-import/              where the player puts a save to import (any folder depth)
+//   <home>/save-import-picked/       Android: what the file browser's choice was copied or unzipped to
 //   <home>/save-export/<time>/       what Export writes
 // <home> is the folder that holds the profile: the game's folder (totk.exe, Android's data folder) as installed.
 //   <profile>/save-snapshots/<time>/ snapshots, newest TOTK_SAVE_SNAPSHOTS kept; unchanged files are hard links
@@ -778,6 +779,16 @@ int fs_save_stage(const char *src) {
     }
     rt_log("fs: %s (%d files, %.1f MiB) loads at the next start", src, nfiles, bytes / 1048576.0);
     return 0;
+}
+
+int fs_save_stage_picked(void) {
+    ready();
+    char dir[1100], src[1100];
+    home_join(dir, sizeof dir, "save-import-picked");
+    int r = find_save_root(dir, 4, src, sizeof src) ? fs_save_stage(src) : -1;
+    if (r) rt_log("fs: no save in what was picked to import");
+    remove_tree(dir);
+    return r;
 }
 
 int fs_save_import_stage(void) {
@@ -1781,6 +1792,14 @@ static void probe_save_menu(const uint64_t *uid) {
     probe_write(home, "option.sav", 0x0049E946u);
     probe_write(home, "slot_00/progress.sav", 0x0049E946u);
     CHECK(fs_save_import_find(src, sizeof src) && !strcmp(src, home), "the import folder found two levels down");
+    CHECK(fs_save_stage_picked() == -1 && !fs_save_pending(), "nothing picked: nothing staged");
+    char picked[1100];
+    home_join(picked, sizeof picked, "save-import-picked/0100F2C0115B6000");   // as a zip from Eden unpacks
+    probe_write(picked, "slot_00/progress.sav", 0x0049E946u);
+    CHECK(fs_save_stage_picked() == 0 && fs_save_pending(), "a picked save staged");
+    home_join(picked, sizeof picked, "save-import-picked");
+    CHECK(plat_fs_kind(picked) == PLAT_FS_MISSING, "the picked copy removed once staged");
+    fs_save_pending_cancel();
     CHECK(fs_save_import_stage() == 0 && fs_save_pending(), "import staged for the next start");
     plat_setenv("TOTK_SAVE_SNAPSHOTS", "2");
     plat_mutex_lock(&lock);   // a restart as probe_restart makes one, with the import where storage_init runs it

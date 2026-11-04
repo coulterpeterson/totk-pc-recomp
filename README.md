@@ -40,8 +40,8 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
   R3 together cycle the overlay. The menu shows the Android defaults as such and leaves out rows that cannot apply
   (window size, graphics card, DLSS, HDR on a screen without it) or that the game version has no patch for
 - The game pauses while the app is in the background, as on the Switch's Home screen
-- Save import, export and snapshots from the menu's Game tab: drop an Eden, Ryujinx or JKSV/Checkpoint save into
-  `files/save-import`, export to `files/save-export`, and keep up to 50 automatic snapshots to go back to
+- Save import, export and snapshots from the menu's Game tab: pick an Eden, Ryujinx or JKSV/Checkpoint save in the file
+  browser, zipped or not, export to `files/save-export`, and keep up to 50 automatic snapshots to go back to
 - Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none
 - Shaders prepared in the background on first play, with a progress bar, so new places do not stutter later
 - Mods and Atmosphère cheats as upstream, from the app's data folder (`files/mods`)

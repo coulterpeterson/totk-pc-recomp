@@ -396,6 +396,13 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_IMPORT_DESC] = "Loads the save in the save-import folder at the next start, in place of yours. Your "
                                  "save is kept as a snapshot first, so you can go back to it.",
     [UI_MENU_SAVE_IMPORT_NONE] = "No save in the save-import folder.",
+    [UI_MENU_SAVE_PICK_DESC] = "Pick a save from Eden, Ryujinx or a Switch (JKSV, Checkpoint): a zip file or an unzipped "
+                               "folder. It loads at the next start, in place of yours. Your save is kept as a snapshot "
+                               "first, so you can go back to it.",
+    [UI_MENU_SAVE_PICK_ZIP] = "Zip file",
+    [UI_MENU_SAVE_PICK_FOLDER] = "Unzipped folder",
+    [UI_MENU_SAVE_PICK_BUSY] = "Copying...",
+    [UI_MENU_SAVE_PICK_NONE] = "No save found there",
     [UI_MENU_SAVE_STAGED] = "Loads at the next start",
     [UI_MENU_SAVE_EXPORT] = "Export save",
     [UI_MENU_SAVE_EXPORT_DESC] = "Copies your save into a new folder in save-export next to the game, in the layout "
@@ -858,6 +865,13 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_IMPORT_DESC] = "Загружает сохранение из папки save-import при следующем запуске вместо вашего. Ваше "
                                  "сначала сохраняется снимком, к нему можно вернуться.",
     [UI_MENU_SAVE_IMPORT_NONE] = "В папке save-import нет сохранения.",
+    [UI_MENU_SAVE_PICK_DESC] = "Выберите сохранение из Eden, Ryujinx или с Switch (JKSV, Checkpoint): zip-файл или "
+                               "распакованную папку. Оно загрузится при следующем запуске вместо вашего. Ваше сначала "
+                               "сохраняется снимком, к нему можно вернуться.",
+    [UI_MENU_SAVE_PICK_ZIP] = "Zip-файл",
+    [UI_MENU_SAVE_PICK_FOLDER] = "Распакованная папка",
+    [UI_MENU_SAVE_PICK_BUSY] = "Копирование...",
+    [UI_MENU_SAVE_PICK_NONE] = "Сохранение не найдено",
     [UI_MENU_SAVE_STAGED] = "Загрузится при запуске",
     [UI_MENU_SAVE_EXPORT] = "Экспортировать",
     [UI_MENU_SAVE_EXPORT_DESC] = "Копирует сохранение в новую папку в save-export рядом с игрой, в виде, который "
@@ -1243,6 +1257,13 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_IMPORT_DESC] = "Carrega o save da pasta save-import no próximo início, no lugar do seu. O seu é "
                                  "guardado antes como snapshot, para você poder voltar a ele.",
     [UI_MENU_SAVE_IMPORT_NONE] = "Nenhum save na pasta save-import.",
+    [UI_MENU_SAVE_PICK_DESC] = "Escolha um save do Eden, do Ryujinx ou de um Switch (JKSV, Checkpoint): um arquivo zip ou "
+                               "uma pasta descompactada. Ele carrega no próximo início, no lugar do seu. O seu é guardado "
+                               "antes como snapshot, para você poder voltar a ele.",
+    [UI_MENU_SAVE_PICK_ZIP] = "Arquivo zip",
+    [UI_MENU_SAVE_PICK_FOLDER] = "Pasta descompactada",
+    [UI_MENU_SAVE_PICK_BUSY] = "Copiando...",
+    [UI_MENU_SAVE_PICK_NONE] = "Nenhum save encontrado",
     [UI_MENU_SAVE_STAGED] = "Carrega no próximo início",
     [UI_MENU_SAVE_EXPORT] = "Exportar save",
     [UI_MENU_SAVE_EXPORT_DESC] = "Copia seu save para uma nova pasta em save-export ao lado do jogo, no formato que o "
@@ -1854,6 +1875,11 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_SAVE_IMPORT] = "导入存档",
     [UI_MENU_SAVE_IMPORT_DESC] = "下次启动时用 save-import 文件夹中的存档替换你的存档。你的存档会先保留为快照，可以恢复。",
     [UI_MENU_SAVE_IMPORT_NONE] = "save-import 文件夹中没有存档。",
+    [UI_MENU_SAVE_PICK_DESC] = "选择 Eden、Ryujinx 或 Switch（JKSV、Checkpoint）的存档：zip 文件或解压后的文件夹。下次启动时替换你的存档。你的存档会先保留为快照，可以恢复。",
+    [UI_MENU_SAVE_PICK_ZIP] = "Zip 文件",
+    [UI_MENU_SAVE_PICK_FOLDER] = "解压后的文件夹",
+    [UI_MENU_SAVE_PICK_BUSY] = "正在复制...",
+    [UI_MENU_SAVE_PICK_NONE] = "未找到存档",
     [UI_MENU_SAVE_STAGED] = "下次启动时载入",
     [UI_MENU_SAVE_EXPORT] = "导出存档",
     [UI_MENU_SAVE_EXPORT_DESC] = "把存档复制到游戏旁 save-export 中的新文件夹，格式可被 Eden 和 JKSV 导入。",
