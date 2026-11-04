@@ -996,6 +996,9 @@ static void rows_save(void) {
     opt_group(UI_MENU_SAVE_GROUP);
     if (pending) {
         opt_text(UI_MENU_SAVE_PENDING, true);
+        if (fs_save_busy()) opt_disable_next(UI_MENU_RESTART_SAVING);
+        if (opt_button("##save_restart", UI_MENU_RESTART, UI_MENU_SAVE_RESTART_DESC) && cfg_save())
+            gfx_window_request_restart();
         if (opt_button("##save_cancel", UI_MENU_SAVE_PENDING_CANCEL, UI_MENU_SAVE_PENDING_CANCEL_DESC)) {
             fs_save_pending_cancel();
             scanned_ns = 0;

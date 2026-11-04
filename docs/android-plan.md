@@ -208,6 +208,13 @@ Done, and how it was checked:
   the fusion takes gravity from it, so it never learned the device was upright. `input.c` device_sample now waits for
   a real sample and scales the length to 1 G by the mean measured while the gyro is still. Ten seconds in, the fusion's
   up is (0.11, 0.17, 0.98) against gravity (-0.11, -0.17, -0.98).
+- Grass vanishing (2026-11-04), found by the scripted grass check on 1.4.3: the grass around Link was gone for good about
+  25 s into the world in about half of the runs, seen on 1.4.3 lifted and native and on 1.0.0 native (the one run of
+  1.0.0 lifted kept it), at a 40 and a 60 fps cap. The write-back of the 260x260 grass maps skipped about 90 of 205 as rewritten by the CPU: it checked the pages
+  inside the map, but a placed pool's write watch marks 64 KiB at a time, so a neighbour's write counted, and the game's
+  memcpy then moved a map of zeros. `vk_texture.c` now looks only at units wholly inside a texture and compares the bytes
+  of one that fills none (`own_units`, `storage_rewritten`). With a first version of this (64 KiB fixed) no write-back was skipped
+  and the grass stayed in all six runs. 1.4.3 native also passes the weapon switch script.
 - Import save opens the system's file browser (`MainActivity.java`): zip or folder, copied to `save-import-picked/`
   and staged as before. Tried on the Thor with the player's Eden zip through to a load at the next start, and with an
   unzipped folder through the folder permission prompt to staging.

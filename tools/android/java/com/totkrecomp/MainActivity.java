@@ -41,6 +41,12 @@ public class MainActivity extends SDLActivity {
         return args == null || args.trim().isEmpty() ? new String[0] : args.trim().split("\\s+");
     }
 
+    // Called on the way out (runtime/android.c android_restart): RestartActivity starts the game again once this process
+    // has ended.
+    public void restartGame() {
+        startActivity(new Intent(this, RestartActivity.class).putExtra("pid", android.os.Process.myPid()));
+    }
+
     // The system's document picker takes a file or a folder, never both on one screen, so the choice comes first.
     public void pickSave(final String title, final String zip, final String folder) {
         pickState = 1;

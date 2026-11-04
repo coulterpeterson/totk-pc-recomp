@@ -229,6 +229,8 @@ void plat_mem_unarm(uint64_t addr, uint64_t n);
 // where page-sized protection changes would leave a mapping per page until the process runs out of them. A no-op where
 // plat_mem_written does not use page protection.
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on);
+// How much memory a write at addr marks as written: 64 KiB in such a range, else a page.
+uint64_t plat_mem_unit_bytes(uint64_t addr);
 // [addr, addr + n) is (on) or is no longer (0) memory whose writes plat_mem_written must report. Once any range is
 // registered, pages outside every registered range are no longer reported or armed again, so a write to them faults at
 // most once: the page-protection watch's cost in faults stays with the memory the caller reads back (vk_memory.c: the

@@ -336,13 +336,11 @@ data folder's `native/` beside `exefs/`:
 .venv/bin/python tools/native/rewrite.py --version v0 --verify
 .venv/bin/python tools/build_game.py --version v0 --gen generated/v0-android --target android --native build/v0-native
 .venv/bin/python tools/build_apk.py --version v0 --out build/v0-android-native
-.venv/bin/python tools/install_android.py --version v0 --out build/v0-android-native --no-data
-adb shell mkdir -p /storage/emulated/0/Android/data/com.totkrecomp/files/native
-adb push build/v0-native/*.patched.bin build/v0-native/*.tsv /storage/emulated/0/Android/data/com.totkrecomp/files/native/
+.venv/bin/python tools/install_android.py --version v0 --native
 ```
 
-For another version in its own folder (`--version-folder` above) the images go into that folder's `native/`, which the
-loader reads beside the version's `exefs/`; for 1.4.3, `build/v143-native` into `files/v143/native/`.
+`--native` installs that APK and pushes the images into `native/` beside the version's `exefs/`, along with the data the
+lifted build's folder holds; with `--version-folder` that is `files/v143/native/` for 1.4.3.
 
 Diagnostics for GPU work (`[diagnostics]` in `totk.ini`): `trace = gpu` logs GPU time per pass every 120 frames
 (`vk_gpuprof.c`: a timestamp at every full barrier, the table keyed by each pass's targets), one frame in 1200 segment

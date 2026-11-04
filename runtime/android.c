@@ -165,6 +165,20 @@ void android_pick_save(const char *title, const char *zip, const char *folder) {
     (*env)->DeleteLocalRef(env, c), (*env)->DeleteLocalRef(env, act);
 }
 
+// The menu's Restart (plat_restart): MainActivity.java restartGame. 1 when asked; the caller then ends the process.
+int android_restart(void) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!env || !act) return 0;
+    jclass c = (*env)->GetObjectClass(env, act);
+    jmethodID m = (*env)->GetMethodID(env, c, "restartGame", "()V");
+    if (m) (*env)->CallVoidMethod(env, act, m);
+    int ok = m && !(*env)->ExceptionCheck(env);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, c), (*env)->DeleteLocalRef(env, act);
+    return ok;
+}
+
 int android_pick_save_state(void) {   // 0 idle, 1 choosing or copying, 2 copied, -1 failed; 2 and -1 are told once
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     jobject act = (jobject)SDL_GetAndroidActivity();

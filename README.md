@@ -137,12 +137,24 @@ You need:
    .venv/bin/python tools/install_android.py --version v0 --gpu-driver path/to/turnip.so
    ```
 
-7. Start "TotK Recomp" on the device. Settings live in `totk.ini` in
+7. Optional, and what the AYN Thor runs day to day: the native-execution build, for about 10% less power at the same
+   frame rate. It uses the lifted build's data and needs step 4's seed. 1.4.3 is shown; `--version-folder` keeps its data
+   beside another version's:
+
+   ```sh
+   .venv/bin/python recomp/gen.py --exefs build/extracted/v143/exefs --out generated/v143-android --target android --patches recomp/patches-v143.txt
+   .venv/bin/python tools/native/rewrite.py --version v143 --verify
+   .venv/bin/python tools/build_game.py --version v143 --gen generated/v143-android --target android
+   .venv/bin/python tools/build_game.py --version v143 --gen generated/v143-android --target android --native build/v143-native
+   .venv/bin/python tools/build_apk.py --version v143 --out build/v143-android-native
+   .venv/bin/python tools/install_android.py --version v143 --native --version-folder
+   ```
+
+8. Start "TotK Recomp" on the device. Settings live in `totk.ini` in
    `/storage/emulated/0/Android/data/com.totkrecomp/files` and in the in-game menu. The log goes to
    `adb logcat -s totk`.
 
-A save from a later game version loaded after its header's version field was set to 1.0.0's
-([docs/android-plan.md](docs/android-plan.md)). There is no tool for that yet.
+To bring a save over, use Import save on the menu's Game tab; it handles a save from a later game version on 1.0.0.
 
 ## Credits
 

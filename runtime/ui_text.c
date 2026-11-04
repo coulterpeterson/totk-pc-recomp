@@ -384,8 +384,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "The validation layer is not installed.",
     [UI_MENU_NOT_IN_VERSION] = "This game version has no patch for it.",
     [UI_MENU_SAVE_GROUP] = "Save game",
-    [UI_MENU_SAVE_PENDING] = "A save waits to load: it replaces your save when the game starts next. Quit the game and "
-                             "start it again. Your current save is kept as a snapshot.",
+    [UI_MENU_SAVE_PENDING] = "A save waits to load: it replaces your save when the game starts next. Your current save "
+                             "is kept as a snapshot.",
+    [UI_MENU_SAVE_RESTART_DESC] = "Closes the game and starts it again with the waiting save. Progress since your last "
+                                  "save is lost.",
     [UI_MENU_SAVE_PENDING_CANCEL] = "Don't load it",
     [UI_MENU_SAVE_PENDING_CANCEL_DESC] = "Keeps your current save: the waiting save is not loaded at the next start.",
     [UI_MENU_SAVE_IMPORT_GROUP] = "Import and export",
@@ -853,8 +855,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "Слой проверки не установлен.",
     [UI_MENU_NOT_IN_VERSION] = "Для этой версии игры нет патча.",
     [UI_MENU_SAVE_GROUP] = "Сохранение игры",
-    [UI_MENU_SAVE_PENDING] = "Сохранение ждёт загрузки: оно заменит ваше при следующем запуске игры. Выйдите из игры и "
-                             "запустите её снова. Текущее сохранение останется снимком.",
+    [UI_MENU_SAVE_PENDING] = "Сохранение ждёт загрузки: оно заменит ваше при следующем запуске игры. Текущее сохранение "
+                             "останется снимком.",
+    [UI_MENU_SAVE_RESTART_DESC] = "Закрывает игру и запускает её снова с ожидающим сохранением. Прогресс после последнего "
+                                  "сохранения будет потерян.",
     [UI_MENU_SAVE_PENDING_CANCEL] = "Не загружать",
     [UI_MENU_SAVE_PENDING_CANCEL_DESC] = "Оставляет текущее сохранение: ожидающее не загрузится при следующем запуске.",
     [UI_MENU_SAVE_IMPORT_GROUP] = "Импорт и экспорт",
@@ -1245,8 +1249,10 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "A camada de validação não está instalada.",
     [UI_MENU_NOT_IN_VERSION] = "Esta versão do jogo não tem o patch.",
     [UI_MENU_SAVE_GROUP] = "Save do jogo",
-    [UI_MENU_SAVE_PENDING] = "Um save espera para carregar: ele substitui o seu quando o jogo iniciar de novo. Saia do "
-                             "jogo e inicie-o outra vez. Seu save atual fica guardado como snapshot.",
+    [UI_MENU_SAVE_PENDING] = "Um save espera para carregar: ele substitui o seu quando o jogo iniciar de novo. Seu save "
+                             "atual fica guardado como snapshot.",
+    [UI_MENU_SAVE_RESTART_DESC] = "Fecha o jogo e inicia de novo com o save em espera. O progresso desde o último save é "
+                                  "perdido.",
     [UI_MENU_SAVE_PENDING_CANCEL] = "Não carregar",
     [UI_MENU_SAVE_PENDING_CANCEL_DESC] = "Mantém seu save atual: o save em espera não carrega no próximo início.",
     [UI_MENU_SAVE_IMPORT_GROUP] = "Importar e exportar",
@@ -1866,7 +1872,8 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_VK_VALIDATION_MISSING] = "未安装验证层。",
     [UI_MENU_NOT_IN_VERSION] = "此游戏版本没有对应补丁。",
     [UI_MENU_SAVE_GROUP] = "游戏存档",
-    [UI_MENU_SAVE_PENDING] = "有存档等待载入：下次启动游戏时会替换你的存档。请退出游戏后重新启动。当前存档会保留为快照。",
+    [UI_MENU_SAVE_PENDING] = "有存档等待载入：下次启动游戏时会替换你的存档。当前存档会保留为快照。",
+    [UI_MENU_SAVE_RESTART_DESC] = "关闭游戏并用等待中的存档重新启动。上次存档之后的进度会丢失。",
     [UI_MENU_SAVE_PENDING_CANCEL] = "不载入",
     [UI_MENU_SAVE_PENDING_CANCEL_DESC] = "保留当前存档：等待中的存档在下次启动时不载入。",
     [UI_MENU_SAVE_IMPORT_GROUP] = "导入与导出",

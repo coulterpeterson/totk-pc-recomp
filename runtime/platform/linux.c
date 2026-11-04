@@ -1071,6 +1071,10 @@ void plat_mem_watch_only(uint64_t addr, uint64_t n, int on) {
 
 static int bit(const uint64_t *b, uint64_t p) { return b && (__atomic_load_n(&b[p / 64], __ATOMIC_ACQUIRE) >> (p % 64) & 1); }
 
+uint64_t plat_mem_unit_bytes(uint64_t addr) {
+    return addr < PS_LIMIT && bit(mp_unit, addr / PG) ? UNIT_PAGES * PG : PG;
+}
+
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on) {
     if (!mp_on || !n || addr + n > PS_LIMIT) return;
     plat_mutex_lock(&vm_lock);
@@ -2019,6 +2023,10 @@ static void spawn_close_from(posix_spawn_file_actions_t *fa, int from) {
     if (posix_spawn_file_actions_addclosefrom_np) posix_spawn_file_actions_addclosefrom_np(fa, from);
 }
 
+#ifdef __ANDROID__
+int android_restart(void);
+int plat_restart(void) { return android_restart(); }   // an app has no executable to spawn
+#else
 int plat_restart(void) {
     // the arguments, NUL-separated, from /proc/self/cmdline
     static char args[16384];
@@ -2052,6 +2060,7 @@ int plat_restart(void) {
     posix_spawn_file_actions_destroy(&fa);
     return e == 0;
 }
+#endif
 
 int plat_spawn(const char *const *argv, const char *cwd) {
     posix_spawn_file_actions_t fa;

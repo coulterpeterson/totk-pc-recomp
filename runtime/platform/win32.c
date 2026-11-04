@@ -628,6 +628,7 @@ static LONG CALLBACK fault_veh(EXCEPTION_POINTERS *ep) {
 
 void plat_mem_unarm(uint64_t addr, uint64_t n) { (void)addr, (void)n; }
 void plat_mem_track_unit(uint64_t addr, uint64_t n, int on) { (void)addr, (void)n, (void)on; }
+uint64_t plat_mem_unit_bytes(uint64_t addr) { (void)addr; return 4096; }
 void plat_mem_watch_only(uint64_t addr, uint64_t n, int on) { (void)addr, (void)n, (void)on; }
 
 void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {

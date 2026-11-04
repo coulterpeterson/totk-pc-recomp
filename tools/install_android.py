@@ -14,11 +14,16 @@ folder, which the app then loads instead of the system's driver (runtime/android
 game versions sit on the device side by side and each version's APK finds its own; saves, settings and caches stay
 shared (a save a newer version wrote may not load in an older one).
 
+--native installs the native-execution build (docs/native-execution.md): build/<version>-android-native/totk.apk and the
+rewritten images of build/<version>-native in native/ beside the version's exefs/. An image is compared by its hash,
+since a rewrite can change its bytes and keep its size.
+
   python tools/install_android.py [--version v0] [--serial SERIAL] [--no-apk] [--no-data] [--gpu-driver FILE|system]
-                                  [--version-folder]
+                                  [--version-folder] [--native]
 """
 
 import argparse
+import hashlib
 import shlex
 import shutil
 import subprocess
@@ -75,6 +80,17 @@ def push(serial, src, dst):
         adb(serial, 'push', src, dst)
 
 
+def push_changed(serial, src, dst):
+    """push for a file that can change and keep its size: compared by hash."""
+    out = adb(serial, 'shell', f'sha256sum {shlex.quote(dst)} 2>/dev/null || true', capture=True).split()
+    if out and out[0] == hashlib.sha256(src.read_bytes()).hexdigest():
+        print(f'  up to date: {dst}')
+        return
+    make_dir(serial, dst.rsplit('/', 1)[0])
+    print(f'  {src.name} ({src.stat().st_size / (1 << 20):,.1f} MiB) -> {dst}', flush=True)
+    adb(serial, 'push', src, dst)
+
+
 def push_resumable(serial, src, dst):
     """A large file in PIECE-sized appends, each a stream into `cat >>` on the device. adb push deletes what it wrote
     when the connection drops, which over wireless debugging lost gigabytes of romfs.bin at a time; this keeps what
@@ -125,10 +141,12 @@ def main():
     ap.add_argument('--version-folder', action='store_true',
                     help='push the game data into <data>/<version>/, beside another version\'s; the app built for that '
                          'version looks there first (runtime/main.c portable_paths)')
+    ap.add_argument('--native', action='store_true',
+                    help='the native-execution build: its APK and the rewritten images of build/<version>-native')
     args = ap.parse_args()
     if not shutil.which('adb'):
         sys.exit('adb not found: install the Android platform tools')
-    out = (args.out or ROOT / 'build' / f'{args.version}-android').resolve()
+    out = (args.out or ROOT / 'build' / (f'{args.version}-android-native' if args.native else f'{args.version}-android')).resolve()
     extracted = work_dir() / 'extracted' / args.version
     if not args.no_apk:
         apk = out / 'totk.apk'
@@ -143,21 +161,31 @@ def main():
             if drv.suffix != '.so' or not drv.is_file():
                 sys.exit(f'{drv}: not a .so file')
             push(args.serial, drv, f'{HOME}/gpu_driver/{drv.name}')
+    data = f'{HOME}/{args.version}' if args.version_folder else HOME
+    if args.native:
+        images = ROOT / 'build' / f'{args.version}-native'
+        files = sorted(images.glob('*.patched.bin')) + sorted(images.glob('*.tsv'))
+        if not files:
+            sys.exit(f'{images} holds no rewritten images: run tools/native/rewrite.py --version {args.version}')
+        print(f'native images -> {data}/native', flush=True)
+        for f in files:
+            push_changed(args.serial, f, f'{data}/native/{f.name}')
     if args.no_data:
         return
-    data = f'{HOME}/{args.version}' if args.version_folder else HOME
     print(f'data -> {data}', flush=True)
     for name in ('main', 'main.npdm', 'sdk', 'subsdk0'):
         push(args.serial, extracted / 'exefs' / name, f'{data}/exefs/{name}')
     push(args.serial, extracted / 'romfs' / 'romfs.bin', f'{data}/romfs/romfs.bin')
-    push(args.serial, out / 'romfs-index.bin', f'{data}/romfs-index.bin')
+    # the native build's folder has no index, seed or overlays of its own: they are the lifted build's
+    lifted = ROOT / 'build' / f'{args.version}-android' if args.native else out
+    push(args.serial, lifted / 'romfs-index.bin', f'{data}/romfs-index.bin')
     push(args.serial, ROOT / 'build' / 'xlate-android' / 'totk_xlate.id', f'{HOME}/totk_xlate.id')
     for seed in ('seed-answers.bin', 'seed-programs.bin'):   # tools/prepare_shaders.py --no-run: the shaders the game
-        if (out / seed).is_file():                            # prepares in the background (TOTK_SHADER_PREPARE)
-            push(args.serial, out / seed, f'{data}/{seed}')
-    for overlay in sorted(out.glob('romfs-patches*')):   # beside romfs-index.bin, where romfs.c looks for them
+        if (lifted / seed).is_file():                         # prepares in the background (TOTK_SHADER_PREPARE)
+            push(args.serial, lifted / seed, f'{data}/{seed}')
+    for overlay in sorted(lifted.glob('romfs-patches*')):   # beside romfs-index.bin, where romfs.c looks for them
         for f in sorted(p for p in overlay.rglob('*') if p.is_file()):
-            push(args.serial, f, f'{data}/{f.relative_to(out).as_posix()}')
+            push(args.serial, f, f'{data}/{f.relative_to(lifted).as_posix()}')
     print('done: start "TotK Recomp" on the device; logcat -s totk shows its log')
 
 
