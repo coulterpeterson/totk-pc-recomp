@@ -21,6 +21,7 @@
 #include "input.h"
 #include "input_map.h"
 #include "input_wsys.h"
+#include "motion_cal.h"
 #include "nvn_api.h"
 #include "ui/menu.h"
 #include "vk.h"
@@ -738,6 +739,75 @@ static int android_rotation(void) {
 static int android_rotation(void) { return 0; }
 #endif
 
+// The menu's Calibrate motion: the request and the state cross between the menu and this thread, the run stays here.
+static MotionCalRun cal_run;
+static int cal_request;        // 1 start, -1 cancel
+static int cal_state;          // MCAL_*
+static int cal_still_pct;
+static int dev_in_use;         // motion comes from the device's sensors now
+static uint64_t cal_poll_ns;   // the menu's last look at the run
+
+// One raw sample into a run: before any correction, since a run finds those corrections.
+static void cal_feed(const float a[3], const float g[3], uint64_t now) {
+    static uint64_t last;
+    double dt = last && now - last < 100000000ull ? (double)(now - last) * 1e-9 : 0.004;
+    last = now;
+    int want = __atomic_exchange_n(&cal_request, 0, __ATOMIC_ACQ_REL);
+    if (want > 0) {
+        motion_cal_start(&cal_run, android_rotation());
+        __atomic_store_n(&cal_still_pct, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&cal_state, MCAL_STILL, __ATOMIC_RELEASE);
+    } else if (want < 0) {
+        __atomic_store_n(&cal_state, MCAL_IDLE, __ATOMIC_RELEASE);
+    }
+    int st = __atomic_load_n(&cal_state, __ATOMIC_RELAXED);
+    if (st != MCAL_STILL && st != MCAL_TILT) return;
+    // The menu closed. Not sooner than this: a frame can take a second or more (a screenshot of the device stalls it)
+    if (now - __atomic_load_n(&cal_poll_ns, __ATOMIC_RELAXED) > 3000000000ull) {
+        __atomic_store_n(&cal_state, MCAL_IDLE, __ATOMIC_RELEASE);
+        return;
+    }
+    st = motion_cal_feed(&cal_run, a, g, dt);
+    __atomic_store_n(&cal_still_pct, motion_cal_still_pct(&cal_run), __ATOMIC_RELAXED);
+    __atomic_store_n(&cal_state, st, __ATOMIC_RELEASE);
+    if (st >= MCAL_OK) rt_log("input: motion calibration ended in state %d (map %d %d %d, gyro sign %d)", st,
+                              cal_run.cal.map[0], cal_run.cal.map[1], cal_run.cal.map[2], cal_run.cal.gyro_sign);
+}
+
+int input_motion_device(void) { return __atomic_load_n(&dev_in_use, __ATOMIC_RELAXED); }
+
+void input_motion_cal_start(int on) {
+    __atomic_store_n(&cal_poll_ns, plat_now_ns(), __ATOMIC_RELAXED);
+    __atomic_store_n(&cal_request, on ? 1 : -1, __ATOMIC_RELEASE);
+}
+
+int input_motion_cal_poll(int *still_pct, char *setting, unsigned cap, int *standard) {
+    __atomic_store_n(&cal_poll_ns, plat_now_ns(), __ATOMIC_RELAXED);
+    *still_pct = __atomic_load_n(&cal_still_pct, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&cal_request, __ATOMIC_ACQUIRE) > 0) return *still_pct = 0, MCAL_STILL;   // not taken yet
+    int st = __atomic_load_n(&cal_state, __ATOMIC_ACQUIRE);
+    if (st < MCAL_OK) return st;
+    if (st == MCAL_OK) {   // the thread leaves a finished run alone until a new request
+        motion_cal_format(&cal_run.cal, setting, cap);
+        *standard = motion_cal_is_standard(&cal_run.cal);
+    }
+    __atomic_store_n(&cal_state, MCAL_IDLE, __ATOMIC_RELEASE);
+    return st;
+}
+
+// TOTK_MOTION_CAL, read again when cfg_version changes; with none, the sensors' axes as they report them.
+static const MotionCal *dev_calibration(void) {
+    static MotionCal cal;
+    static unsigned seen;
+    static int read;
+    unsigned v = cfg_version();
+    if (!read || v != seen) {
+        read = 1, seen = v;
+        if (!motion_cal_parse(cfg_get("TOTK_MOTION_CAL"), &cal)) motion_cal_identity(&cal);
+    }
+    return &cal;
+}
+
 static int device_sensors(void) {
     if (dev_state) return dev_state > 0;
     dev_state = -1;
@@ -774,6 +844,9 @@ static int device_sensors(void) {
 // the fusion takes gravity from it only within 15 % of 1 G (motion_fusion.c integrate): without a correction it never
 // learned the device was upright, so the game took a turn for a roll. So the length is scaled to 1 G, by the mean length
 // measured while the gyro says the device is still.
+//
+// A driver can break Android's axes convention, or a gyro read off zero at rest: the menu's Calibrate motion finds both
+// and the setting it saves goes in before the rotation (motion_cal.c).
 static int device_sample(float a[3], float g[3]) {
     if (!device_sensors()) return 0;
     SDL_UpdateSensors();
@@ -781,12 +854,14 @@ static int device_sample(float a[3], float g[3]) {
     if (!SDL_GetSensorData(dev_accel, da, 3) || !SDL_GetSensorData(dev_gyro, dg, 3)) return 0;
     float len = sqrtf(da[0] * da[0] + da[1] * da[1] + da[2] * da[2]);
     if (len < 1) return 0;
+    uint64_t now = plat_now_ns();
+    cal_feed(da, dg, now);
     static float rest;
     float rate = sqrtf(dg[0] * dg[0] + dg[1] * dg[1] + dg[2] * dg[2]);
     if (len > 7 && len < 14 && (!rest || rate < 0.1f)) rest = rest ? rest * 0.98f + len * 0.02f : len;
     if (rest)
         for (int i = 0; i < 3; i++) da[i] *= SDL_STANDARD_GRAVITY / rest;
-    uint64_t now = plat_now_ns();
+    motion_cal_apply(dev_calibration(), da, dg);
     if (now - dev_rotation_ns > 2000000000ull) dev_rotation_ns = now, dev_rotation = android_rotation();
     const float *v[2] = {da, dg};
     float *out[2] = {a, g};
@@ -848,8 +923,12 @@ static void motion_main(void *arg) {
                    SDL_GetGamepadSensorData(pad, SDL_SENSOR_GYRO, g, 3);
         }
         plat_mutex_unlock(&lock);
-        if (!input_motion_enabled()) continue;
+        if (!input_motion_enabled()) {
+            __atomic_store_n(&dev_in_use, 0, __ATOMIC_RELAXED);
+            continue;
+        }
         if (!pad_sensors) have = device_sample(a, g);
+        __atomic_store_n(&dev_in_use, !pad_sensors && dev_state > 0, __ATOMIC_RELAXED);
         if (!have) continue;
         double acc[3], gyro[3];
         input_motion_axes(a, g, acc, gyro);

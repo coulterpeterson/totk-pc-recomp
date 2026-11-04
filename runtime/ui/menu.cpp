@@ -43,6 +43,7 @@ extern "C" {
 #include "input.h"
 #include "input_map.h"
 #include "mods.h"
+#include "motion_cal.h"
 #include "perfmon.h"
 #include "platform/platform.h"
 #include "sysinfo.h"
@@ -862,6 +863,47 @@ static void restart_confirm(void) {
     ImGui::EndPopup();
 }
 
+// Calibrate motion, while motion comes from the device's own sensors: one button, the step to do or how the last run
+// ended under it, and a row to take a saved calibration back. A saved one applies at once (input.c dev_calibration).
+static void rows_motion_cal(void) {
+    if (!input_motion_device()) return;
+    static uint64_t note_until;
+    static UiTextId note;
+    static bool note_warn;
+    char setting[96], value[16] = "";
+    int pct = 0, standard = 0;
+    int st = input_motion_cal_poll(&pct, setting, sizeof setting, &standard);
+    bool running = st == MCAL_STILL || st == MCAL_TILT;
+    if (st >= MCAL_OK) {
+        note_warn = st != MCAL_OK;
+        note_until = plat_now_ns() + 10000000000ull;
+        switch (st) {
+        case MCAL_OK: note = standard ? UI_MENU_MOTION_CAL_OK_STD : UI_MENU_MOTION_CAL_OK_FIXED; break;
+        case MCAL_ERR_POSE: note = UI_MENU_MOTION_CAL_FAIL_POSE; break;
+        case MCAL_ERR_AXIS: note = UI_MENU_MOTION_CAL_FAIL_AXIS; break;
+        case MCAL_ERR_GYRO: note = UI_MENU_MOTION_CAL_FAIL_GYRO; break;
+        default: note = UI_MENU_MOTION_CAL_FAIL_TILT; break;
+        }
+        if (st == MCAL_OK) {
+            cfg_set("TOTK_MOTION_CAL", setting);
+            opt_save_soon();
+        }
+    }
+    if (st == MCAL_STILL) snprintf(value, sizeof value, "%d %%", pct);
+    if (opt_button("##motion_cal", UI_MENU_MOTION_CAL, UI_MENU_MOTION_CAL_DESC, value)) {
+        input_motion_cal_start(!running);
+        note_until = 0;
+    }
+    if (running) opt_text(st == MCAL_STILL ? UI_MENU_MOTION_CAL_STILL : UI_MENU_MOTION_CAL_TILT, true);
+    else if (plat_now_ns() < note_until) opt_text(note, note_warn);
+    const char *saved = cfg_get("TOTK_MOTION_CAL");
+    if (saved && *saved && opt_button("##motion_cal_reset", UI_MENU_MOTION_CAL_RESET, UI_MENU_MOTION_CAL_RESET_DESC)) {
+        const char *key = "MOTION_CAL";
+        cfg_reset(&key, 1);
+        opt_save_soon();
+    }
+}
+
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
@@ -872,6 +914,7 @@ static void tab_controls(float scale) {
     opt_choice("TOTK_PROMPTS", UI_MENU_PROMPTS, prompts, 2, UI_MENU_PROMPTS_DESC, note);
     bool ask = restart && opt_button("##restart", UI_MENU_RESTART, UI_MENU_RESTART_DESC);
     opt_toggle("TOTK_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
+    rows_motion_cal();
     opt_slider("TOTK_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
     opt_slider("TOTK_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
     opt_toggle("TOTK_RUMBLE_TRIGGERS", UI_MENU_RUMBLE_TRIGGERS, UI_MENU_RUMBLE_TRIGGERS_DESC);

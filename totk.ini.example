@@ -232,6 +232,9 @@
 [input]
 # Gamepad motion controls (0 = off) and vibration (0 = off).
 # motion = 1
+# The device's own sensors as the menu's Calibrate motion found them (Controls tab; it writes this line): three signed
+# axes, the gyro's sign and its resting error. Unset: the sensors' axes as Android reports them.
+# motion_cal = 1 2 3 1 0.00000 0.00000 0.00000
 # rumble = 1
 # Rumble strength in percent (0 to 300; 0 = off) and the exponent on the amplitude (0.2 to 1.5; lower = weak pulses
 # stronger, 1 = linear). rumble_triggers = 1 also drives the impulse triggers of an Xbox pad.

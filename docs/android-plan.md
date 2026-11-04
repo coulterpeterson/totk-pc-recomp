@@ -208,6 +208,12 @@ Done, and how it was checked:
   the fusion takes gravity from it, so it never learned the device was upright. `input.c` device_sample now waits for
   a real sample and scales the length to 1 G by the mean measured while the gyro is still. Ten seconds in, the fusion's
   up is (0.11, 0.17, 0.98) against gravity (-0.11, -0.17, -0.98).
+- Calibrate motion (Controls tab, 2026-11-04), for a handheld whose driver breaks Android's axes convention: the pose of
+  play held still, then a tilt of the top edge away and back; saved as `motion_cal` and applied live. The solver
+  (`runtime/motion_cal.c`) passes `tests/motion_cal_test.c`: all 24 turns of the sensor frame at both landscape rotations
+  with the gyro either way round, the Thor's recorded numbers (no correction), and the failures. One layout at each
+  rotation can't be told from an ordinary device tilted the wrong way, and is refused. On the Thor the row, its steps,
+  the timeout's message and a saved setting's effect on the live readings were checked; other handhelds are unproven.
 - Grass vanishing (2026-11-04), found by the scripted grass check on 1.4.3: the grass around Link was gone for good about
   25 s into the world in about half of the runs, seen on 1.4.3 lifted and native and on 1.0.0 native (the one run of
   1.0.0 lifted kept it), at a 40 and a 60 fps cap. The write-back of the 260x260 grass maps skipped about 90 of 205 as rewritten by the CPU: it checked the pages

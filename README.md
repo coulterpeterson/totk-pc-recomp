@@ -42,7 +42,7 @@ scope, so the work lives here. It builds on the aarch64 groundwork of
 - The game pauses while the app is in the background, as on the Switch's Home screen
 - Save import, export and snapshots from the menu's Game tab: pick an Eden, Ryujinx or JKSV/Checkpoint save in the file
   browser, zipped or not, export to `files/save-export`, and keep up to 50 automatic snapshots to go back to
-- Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none
+- Motion controls from the handheld's own gyro and accelerometer when its built-in controller reports none, with **Calibrate motion** in the Controls tab for a device whose axes come out wrong
 - Shaders prepared in the background on first play, with a progress bar, so new places do not stutter later
 - Mods and Atmosphère cheats as upstream, from the app's data folder (`files/mods`)
 - The game's own launcher icon, taken from your dump

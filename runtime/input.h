@@ -62,6 +62,13 @@ int input_rumble_triggers_enabled(void);
 void input_motion_start(void);
 // TOTK_MOTION is not "0" (a live setting: read again when cfg_version changes). Off: the sensor reads at rest.
 int input_motion_enabled(void);
+// The menu's Calibrate motion (motion_cal.h), run on the motion thread on the device's own sensors. input_motion_device:
+// motion comes from those now, not from a gamepad's. start: on 1 begins a run, on 0 cancels it. poll: on every frame the
+// menu shows the row, as a run stops 3 s after the last poll (the menu closed); returns MCAL_*, once for a finished
+// run, then with setting (TOTK_MOTION_CAL's text) and *standard (the axes needed no correction) on MCAL_OK.
+int input_motion_device(void);
+void input_motion_cal_start(int on);
+int input_motion_cal_poll(int *still_pct, char *setting, unsigned cap, int *standard);
 // SDL sensor values (accelerometer m/s^2, gyro rad/s, SDL gamepad axes) to the Switch controller frame motion_feed
 // takes (acceleration in G as gravity reads, rotation rad/s). The mapping is documented in input_win.c.
 void input_motion_axes(const float sdl_acc[3], const float sdl_gyro[3], double acc_g[3], double gyro[3]);
